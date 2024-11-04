@@ -27,19 +27,21 @@ function reset_screen() {
   stty sane
 }
 
-# Set dialog options
-DIALOG_OPTS="--colors --clear --ok-label OK --cancel-label Cancel"
+# Function to display dialogs with consistent settings
+function show_dialog() {
+  dialog --clear --colors --backtitle "Arch Linux Installation" "$@"
+}
 
 # Check for UEFI mode
 if [ ! -d /sys/firmware/efi/efivars ]; then
-  dialog $DIALOG_OPTS --msgbox "Your system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 10 50
+  show_dialog --msgbox "\nYour system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 10 60
   reset_screen
   exit 1
 fi
 
 # Check internet connection
 if ! ping -c 1 archlinux.org &> /dev/null; then
-  dialog $DIALOG_OPTS --msgbox "Internet connection is required.\nPlease connect to the internet and rerun the installer." 10 50
+  show_dialog --msgbox "\nInternet connection is required.\nPlease connect to the internet and rerun the installer." 10 60
   reset_screen
   exit 1
 fi
@@ -48,21 +50,22 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
-dialog $DIALOG_OPTS --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 15 60
+show_dialog --title "Arch Linux Minimal Installer" --msgbox "\nWelcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 15 60
 
 # Disk selection
-disk=$(dialog $DIALOG_OPTS --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 \
-  $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+disk_options=($(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+disk=$(show_dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 "${disk_options[@]}")
 
 if [ -z "$disk" ]; then
-  dialog $DIALOG_OPTS --msgbox "No disk selected. Exiting." 10 40
+  show_dialog --msgbox "\nNo disk selected. Exiting." 10 40
   reset_screen
   exit 1
 fi
 
 # Confirm disk selection
-dialog $DIALOG_OPTS --yesno "You have selected $disk. All data on this disk will be erased. Continue?" 10 50
+show_dialog --yes-label "Continue" --no-label "Cancel" --yesno "\nYou have selected $disk.\nAll data on this disk will be erased.\n\nContinue?" 12 60
 if [ $? -ne 0 ]; then
+  show_dialog --msgbox "\nInstallation canceled by user. Exiting." 10 40
   reset_screen
   exit 1
 fi
@@ -82,19 +85,19 @@ else
 fi
 
 # Format partitions
-dialog $DIALOG_OPTS --infobox "Formatting partitions..." 10 50
-mkfs.vfat -F32 "$esp"
-mkfs.btrfs -f -L Arch "$root_partition"
+show_dialog --infobox "\nFormatting partitions..." 5 60
+mkfs.vfat -F32 "$esp" >/dev/null 2>&1
+mkfs.btrfs -f -L Arch "$root_partition" >/dev/null 2>&1
 
 # Mount root partition
 mount "$root_partition" /mnt
 
 # Create Btrfs subvolumes
-btrfs su cr /mnt/@
-btrfs su cr /mnt/@home
-btrfs su cr /mnt/@pkg
-btrfs su cr /mnt/@log
-btrfs su cr /mnt/@snapshots
+btrfs su cr /mnt/@ >/dev/null 2>&1
+btrfs su cr /mnt/@home >/dev/null 2>&1
+btrfs su cr /mnt/@pkg >/dev/null 2>&1
+btrfs su cr /mnt/@log >/dev/null 2>&1
+btrfs su cr /mnt/@snapshots >/dev/null 2>&1
 
 # Unmount root partition
 umount /mnt
@@ -111,45 +114,45 @@ mount -o noatime,compress=zstd,discard=async,subvol=@snapshots "$root_partition"
 mount "$esp" /mnt/boot/efi
 
 # Detect CPU and offer to install microcode
-cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+cpu_vendor=$(lscpu | grep -i 'vendor id:' | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
 microcode_pkg=""
 microcode_img=""
 
 if [[ "$cpu_vendor" == *"intel"* ]]; then
-  dialog $DIALOG_OPTS --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 10 50
+  show_dialog --yesno "\nCPU detected: Intel\n\nWould you like to install intel-ucode?" 10 60
   if [ $? -eq 0 ]; then
     microcode_pkg="intel-ucode"
     microcode_img="intel-ucode.img"
   fi
 elif [[ "$cpu_vendor" == *"amd"* ]]; then
-  dialog $DIALOG_OPTS --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 10 50
+  show_dialog --yesno "\nCPU detected: AMD\n\nWould you like to install amd-ucode?" 10 60
   if [ $? -eq 0 ]; then
     microcode_pkg="amd-ucode"
     microcode_img="amd-ucode.img"
   fi
 else
-  dialog $DIALOG_OPTS --msgbox "CPU vendor not detected. Microcode will not be installed." 10 50
+  show_dialog --msgbox "\nCPU vendor not detected. Microcode will not be installed." 10 60
 fi
 
 # Prompt for hostname
-hostname=$(dialog $DIALOG_OPTS --stdout --inputbox "Enter a hostname for your system:" 10 50)
+hostname=$(show_dialog --stdout --inputbox "\nEnter a hostname for your system:" 10 60)
 if [ -z "$hostname" ]; then
-  dialog $DIALOG_OPTS --msgbox "No hostname entered. Using default 'archlinux'." 10 50
+  show_dialog --msgbox "\nNo hostname entered. Using default 'archlinux'." 10 60
   hostname="archlinux"
 fi
 
 # Prompt for timezone
 timezones=($(timedatectl list-timezones))
-timezone=$(dialog $DIALOG_OPTS --stdout --menu "Select your timezone:" 22 76 16 $(for i in "${!timezones[@]}"; do echo $i "${timezones[$i]}"; done))
-if [ -z "$timezone" ]; then
-  dialog $DIALOG_OPTS --msgbox "No timezone selected. Using 'UTC' as default." 10 50
+timezone_selection=$(dialog --clear --stdout --title "Select Timezone" --menu "Select your timezone:" 20 70 15 "${timezones[@]}")
+if [ -z "$timezone_selection" ]; then
+  show_dialog --msgbox "\nNo timezone selected. Using 'UTC' as default." 10 60
   timezone="UTC"
 else
-  timezone="${timezones[$timezone]}"
+  timezone="$timezone_selection"
 fi
 
 # Offer to install btrfs-progs
-dialog $DIALOG_OPTS --yesno "Would you like to install btrfs-progs for Btrfs management?" 10 50
+show_dialog --yesno "\nWould you like to install btrfs-progs for Btrfs management?" 10 60
 if [ $? -eq 0 ]; then
   btrfs_pkg="btrfs-progs"
 else
@@ -157,7 +160,7 @@ else
 fi
 
 # Offer to enable ZRAM
-dialog $DIALOG_OPTS --yesno "Would you like to enable ZRAM for swap?" 10 50
+show_dialog --yesno "\nWould you like to enable ZRAM for swap?" 10 60
 if [ $? -eq 0 ]; then
   zram_pkg="zram-generator"
 else
@@ -165,18 +168,13 @@ else
 fi
 
 # Install base system with essential packages
-dialog $DIALOG_OPTS --infobox "Installing base system..." 10 50
-pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg efibootmgr >> /tmp/installer.log 2>&1
+show_dialog --infobox "\nInstalling base system...\nThis may take a while." 10 60
+pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg efibootmgr >/dev/null 2>&1
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Export variables for chroot
-export hostname
-export timezone
-export zram_pkg
-
-# Chroot into the new system
+# Chroot into the new system and configure it
 arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
 ln -sf /usr/share/zoneinfo/"$timezone" /etc/localtime
@@ -209,12 +207,12 @@ EOF
 
 # Set root password
 while true; do
-  root_password=$(dialog $DIALOG_OPTS --no-cancel --passwordbox "Enter root password:" 10 50 3>&1 1>&2 2>&3 3>&-)
-  root_password_confirm=$(dialog $DIALOG_OPTS --no-cancel --passwordbox "Confirm root password:" 10 50 3>&1 1>&2 2>&3 3>&-)
+  root_password=$(dialog --clear --stdout --passwordbox "\nEnter root password:" 10 60)
+  root_password_confirm=$(dialog --clear --stdout --passwordbox "\nConfirm root password:" 10 60)
   if [ "$root_password" = "$root_password_confirm" ]; then
     break
   else
-    dialog $DIALOG_OPTS --msgbox "Passwords do not match. Please try again." 10 50
+    show_dialog --msgbox "\nPasswords do not match. Please try again." 10 60
   fi
 done
 
@@ -222,22 +220,31 @@ done
 echo "root:$root_password" | arch-chroot /mnt chpasswd
 
 # Offer to install NetworkManager
-dialog $DIALOG_OPTS --yesno "Would you like to install NetworkManager for network management?" 10 50
+show_dialog --yesno "\nWould you like to install NetworkManager for network management?" 10 60
 if [ $? -eq 0 ]; then
-  arch-chroot /mnt pacman -Sy --noconfirm networkmanager
+  arch-chroot /mnt pacman -Sy --noconfirm networkmanager >/dev/null 2>&1
   arch-chroot /mnt systemctl enable NetworkManager
 fi
 
 # Install rEFInd bootloader with Btrfs support and tweaks
-dialog $DIALOG_OPTS --infobox "Installing rEFInd bootloader..." 10 50
-arch-chroot /mnt pacman -Sy --noconfirm refind efibootmgr dosfstools
-arch-chroot /mnt refind-install
+show_dialog --infobox "\nInstalling rEFInd bootloader..." 10 60
+arch-chroot /mnt pacman -Sy --noconfirm refind >/dev/null 2>&1
+
+# Ensure refind-install is available
+if ! arch-chroot /mnt which refind-install &> /dev/null; then
+  show_dialog --msgbox "\nrefind-install not found in chroot environment. Installation cannot proceed." 10 60
+  reset_screen
+  exit 1
+fi
+
+# Proceed with rEFInd installation
+arch-chroot /mnt refind-install >/dev/null 2>&1
 
 # rEFInd configuration
 arch-chroot /mnt sed -i 's/^#enable_mouse/enable_mouse/' /boot/efi/EFI/refind/refind.conf
 arch-chroot /mnt sed -i 's/^#mouse_speed .*/mouse_speed 8/' /boot/efi/EFI/refind/refind.conf
 arch-chroot /mnt sed -i 's/^#resolution .*/resolution max/' /boot/efi/EFI/refind/refind.conf
-arch-chroot /mnt sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/efi/EFI/refind/refind.conf
+arch-chroot /mnt sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-zen,linux-lts/' /boot/efi/EFI/refind/refind.conf
 
 # Create refind_linux.conf with the specified options
 partuuid=$(blkid -s PARTUUID -o value "$root_partition")
@@ -256,14 +263,17 @@ EOF
 cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
 
 # Ask if the user wants to use bash or install zsh (moved after bootloader setup)
-dialog $DIALOG_OPTS --yesno "Would you like to use Zsh as your default shell instead of Bash?" 10 50
+show_dialog --yesno "\nWould you like to use Zsh as your default shell instead of Bash?" 10 60
 if [ $? -eq 0 ]; then
-  arch-chroot /mnt pacman -Sy --noconfirm zsh
-  arch-chroot /mnt chsh -s /bin/zsh root
+  arch-chroot /mnt pacman -Sy --noconfirm zsh >/dev/null 2>&1
+  arch-chroot /mnt chsh -s /bin/zsh root >/dev/null 2>&1
+  shell_config_file="/root/.zshrc"
+else
+  shell_config_file="/root/.bash_profile"
 fi
 
 # Create first_login.sh script for initial login instructions
-cat << 'EOM' > /mnt/root/first_login.sh
+arch-chroot /mnt bash -c "cat << 'EOM' > /root/first_login.sh
 #!/bin/bash
 
 clear
@@ -296,22 +306,23 @@ To create a new user and grant sudo privileges, follow these steps:
 You're all set!
 EOF
 
-# Remove the script and its call from .bash_profile
-rm -- "$0"
-sed -i '/first_login.sh/d' ~/.bash_profile
-EOM
+# Remove the script and its call from the shell configuration file
+rm -- "\$0"
+sed -i '/first_login.sh/d' ~/.'"$(basename "$shell_config_file")"'
+EOM"
 
 # Make the script executable
-chmod +x /mnt/root/first_login.sh
+arch-chroot /mnt chmod +x /root/first_login.sh
 
-# Add the script to root's .bash_profile
-echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
+# Add the script to the appropriate shell's configuration file
+arch-chroot /mnt bash -c "echo 'if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi' >> $shell_config_file"
 
 # Finish
-dialog $DIALOG_OPTS --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 15 60
+show_dialog --yes-label "Reboot" --no-label "Chroot" --yesno "\nInstallation complete!\n\nWould you like to reboot now or enter the chroot environment for additional configuration?\n\nSelect 'Chroot' to enter the chroot environment." 15 60
 if [ $? -eq 0 ]; then
   umount -R /mnt
   reboot
 else
   reset_screen
+  arch-chroot /mnt
 fi
