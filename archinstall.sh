@@ -106,16 +106,17 @@ mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $r
 mount $esp /mnt/boot/efi
 
 # Detect CPU and offer to install microcode
-cpu_vendor=$(lscpu | grep "Vendor ID:" | awk '{print $3}')
+cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
 microcode_pkg=""
 microcode_img=""
-if [[ "$cpu_vendor" == "GenuineIntel" ]]; then
+
+if [[ "$cpu_vendor" == *"intel"* ]]; then
   dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
   if [ $? -eq 0 ]; then
     microcode_pkg="intel-ucode"
     microcode_img="intel-ucode.img"
   fi
-elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
+elif [[ "$cpu_vendor" == *"amd"* ]]; then
   dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
   if [ $? -eq 0 ]; then
     microcode_pkg="amd-ucode"
@@ -216,8 +217,12 @@ EOF
 # Copy refind_linux.conf to rEFInd directory
 cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
 
-# Add post-installation instructions to /etc/motd
-cat << 'EOM' > /mnt/etc/motd
+# Create first_login.sh script for initial login instructions
+cat << 'EOM' > /mnt/root/first_login.sh
+#!/bin/bash
+
+clear
+cat << 'EOF'
 Welcome to your new Arch Linux system!
 
 To create a new user and grant sudo privileges, follow these steps:
@@ -244,10 +249,22 @@ To create a new user and grant sudo privileges, follow these steps:
    pacman -Sy nano
 
 You're all set!
+
+EOF
+
+# Remove the script and its call from .bash_profile
+rm -- "$0"
+sed -i '/first_login.sh/d' ~/.bash_profile
 EOM
 
+# Make the script executable
+chmod +x /mnt/root/first_login.sh
+
+# Add the script to root's .bash_profile
+echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
+
 # Finish
-dialog --msgbox "Installation complete! You can now reboot into your new system.\n\nWhen you log in as root, you will receive instructions on how to create a normal user and grant sudo privileges." 10 70
+dialog --msgbox "Installation complete! You can now reboot into your new system.\n\nWhen you log in as root for the first time, you will receive instructions on how to create a normal user and grant sudo privileges." 10 70
 
 # Unmount partitions
 umount -R /mnt
