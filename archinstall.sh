@@ -206,10 +206,12 @@ fi
 
 # Prompt for timezone
 timezone=$(dialog --stdout --title "Select Timezone" --menu "Select your timezone:" 20 60 15 \
-  $(timedatectl list-timezones | awk '{print $1 " " NR}'))
+  $(timedatectl list-timezones | awk '{print NR " " $1}'))
 if [ -z "$timezone" ]; then
   dialog --msgbox "No timezone selected. Using 'UTC' as default." 6 50
   timezone="UTC"
+else
+  timezone=$(timedatectl list-timezones | sed -n "${timezone}p")
 fi
 
 # Offer to install btrfs-progs
@@ -223,7 +225,7 @@ fi
 # Offer to enable ZRAM
 dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
 if [ $? -eq 0 ]; then
-  zram_pkg="systemd-zram-generator"
+  zram_pkg="zram-generator"
 else
   zram_pkg=""
 fi
@@ -393,3 +395,4 @@ else
   # Drop to the terminal
   clear
 fi
+# yisssss
