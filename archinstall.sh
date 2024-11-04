@@ -347,6 +347,28 @@ else
     ZRAM_PACKAGES=""
 fi
 
+# Ask if the user wants to create a new user
+dialog --yesno "Would you like to create a new user account?" 7 50
+if [ $? -eq 0 ]; then
+    CREATE_USER="yes"
+    USERNAME=$(dialog --stdout --inputbox "Enter the username for the new user:" 8 50)
+    if [ -z "$USERNAME" ]; then
+        dialog --msgbox "No username entered. Installation cancelled." 7 50
+        clear
+        exit 1
+    fi
+
+    # Ask if the user should be added to the wheel group
+    dialog --yesno "Should this user have sudo privileges?" 7 50
+    if [ $? -eq 0 ]; then
+        ADD_TO_WHEEL="yes"
+    else
+        ADD_TO_WHEEL="no"
+    fi
+else
+    CREATE_USER="no"
+fi
+
 # Get PARTUUID before chrooting
 PARTUUID=$(blkid -s PARTUUID -o value $ROOT_PART)
 
@@ -361,8 +383,27 @@ fi
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
+# Copy variables to a temporary file to use inside chroot
+echo "TIMEZONE='$TIMEZONE'" > /mnt/tmp/vars.sh
+echo "HOSTNAME='$HOSTNAME'" >> /mnt/tmp/vars.sh
+echo "MINIMAL_INSTALL='$MINIMAL_INSTALL'" >> /mnt/tmp/vars.sh
+echo "ENABLE_NM='$ENABLE_NM'" >> /mnt/tmp/vars.sh
+echo "ENABLE_GUI='$ENABLE_GUI'" >> /mnt/tmp/vars.sh
+echo "DISPLAY_MANAGER='$DISPLAY_MANAGER'" >> /mnt/tmp/vars.sh
+echo "VIDEO_DRIVER='$VIDEO_DRIVER'" >> /mnt/tmp/vars.sh
+echo "ENABLE_MULTILIB='$ENABLE_MULTILIB'" >> /mnt/tmp/vars.sh
+echo "USE_ZRAM='$USE_ZRAM'" >> /mnt/tmp/vars.sh
+echo "MICROCODE_IMG='$MICROCODE_IMG'" >> /mnt/tmp/vars.sh
+echo "PARTUUID='$PARTUUID'" >> /mnt/tmp/vars.sh
+echo "CREATE_USER='$CREATE_USER'" >> /mnt/tmp/vars.sh
+echo "USERNAME='$USERNAME'" >> /mnt/tmp/vars.sh
+echo "ADD_TO_WHEEL='$ADD_TO_WHEEL'" >> /mnt/tmp/vars.sh
+
 # Chroot into the new system and perform configurations
-arch-chroot /mnt /bin/bash <<EOF
+arch-chroot /mnt /bin/bash <<'EOF'
+# Load variables
+source /tmp/vars.sh
+
 # Set the time zone
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
@@ -430,11 +471,27 @@ compression-algorithm = zstd
 EOLZRAM
 fi
 
-EOF
+# Set root password
+echo "Please set the root password."
+passwd root
 
-# Set root password outside the chroot to ensure interactive prompt
-dialog --title "Root Password" --msgbox "Please set the root password." 7 40
-arch-chroot /mnt passwd root
+# Create user if selected
+if [[ "$CREATE_USER" == "yes" ]]; then
+    useradd -m $USERNAME
+    echo "Please set the password for user $USERNAME."
+    passwd $USERNAME
+
+    if [[ "$ADD_TO_WHEEL" == "yes" ]]; then
+        usermod -aG wheel $USERNAME
+        # Enable sudo for wheel group
+        sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+    fi
+fi
+
+# Remove temporary variables file
+rm /tmp/vars.sh
+
+EOF
 
 # Configure /boot/refind_linux.conf with expanded variables and additional boot options
 cat <<EOL > /mnt/boot/refind_linux.conf
@@ -449,19 +506,12 @@ dialog --yesno "Installation complete. Would you like to chroot into the new sys
 if [ $? -eq 0 ]; then
     dialog --msgbox "You are now entering the chroot environment. Type 'exit' to exit the chroot." 7 60
     clear
-    arch-chroot /mnt
-    # After exiting chroot, ask if the user wants to reboot
-    dialog --yesno "Would you like to reboot now?" 7 40
-    if [ $? -eq 0 ]; then
-        umount -R /mnt
-        reboot
-    else
-        dialog --msgbox "You can reboot later by typing 'reboot'. Remember to unmount the partitions if necessary." 7 70
-    fi
+    # Use exec to replace the current shell with arch-chroot
+    exec arch-chroot /mnt
+    # The script ends here when using exec
 else
     # Unmount partitions
     umount -R /mnt
     dialog --title "Installation Complete" --msgbox "Installation complete. You can reboot now." 7 50
+    clear
 fi
-
-clear
