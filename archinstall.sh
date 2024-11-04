@@ -71,9 +71,9 @@ if [ $? -ne 0 ]; then
 fi
 
 # Wipe the disk and create partitions
-sgdisk --zap-all "$disk"
-sgdisk -n 1:0:+550M -t 1:ef00 "$disk"
-sgdisk -n 2:0:0 -t 2:8300 "$disk"
+sgdisk --zap-all "$disk" >/dev/null 2>&1
+sgdisk -n 1:0:+550M -t 1:ef00 "$disk" >/dev/null 2>&1
+sgdisk -n 2:0:0 -t 2:8300 "$disk" >/dev/null 2>&1
 
 # Get partition names
 if [[ "$disk" == *"nvme"* ]]; then
@@ -103,12 +103,12 @@ btrfs su cr /mnt/@snapshots >/dev/null 2>&1
 umount /mnt
 
 # Mount subvolumes with options
-mount -o noatime,compress=zstd,discard=async,subvol=@ "$root_partition" /mnt
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@ "$root_partition" /mnt
 mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-mount -o noatime,compress=zstd,discard=async,subvol=@home "$root_partition" /mnt/home
-mount -o noatime,compress=zstd,discard=async,subvol=@pkg "$root_partition" /mnt/var/cache/pacman/pkg
-mount -o noatime,compress=zstd,discard=async,subvol=@log "$root_partition" /mnt/var/log
-mount -o noatime,compress=zstd,discard=async,subvol=@snapshots "$root_partition" /mnt/.snapshots
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@home "$root_partition" /mnt/home
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@pkg "$root_partition" /mnt/var/cache/pacman/pkg
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log "$root_partition" /mnt/var/log
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots "$root_partition" /mnt/.snapshots
 
 # Mount EFI partition
 mount "$esp" /mnt/boot/efi
@@ -143,12 +143,15 @@ fi
 
 # Prompt for timezone
 timezones=($(timedatectl list-timezones))
-timezone_selection=$(dialog --clear --stdout --title "Select Timezone" --menu "Select your timezone:" 20 70 15 "${timezones[@]}")
-if [ -z "$timezone_selection" ]; then
-  show_dialog --msgbox "\nNo timezone selected. Using 'UTC' as default." 10 60
+# To prevent the menu from being too large, let's limit the number of displayed timezones or use a different approach
+# Here, we'll split the timezones into multiple columns
+# However, dialog might have limitations; alternatively, use a pager or a smaller subset
+
+# Since dialog's menu can't handle thousands of options, we can prompt the user to enter their timezone manually
+timezone=$(show_dialog --stdout --inputbox "\nEnter your timezone (e.g., Region/City):" 10 60)
+if [ -z "$timezone" ]; then
+  show_dialog --msgbox "\nNo timezone entered. Using 'UTC' as default." 10 60
   timezone="UTC"
-else
-  timezone="$timezone_selection"
 fi
 
 # Offer to install btrfs-progs
@@ -168,13 +171,20 @@ else
 fi
 
 # Install base system with essential packages
-show_dialog --infobox "\nInstalling base system...\nThis may take a while." 10 60
+show_dialog --infobox "\nInstalling base system...\nThis may take a while." 7 60
 pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg efibootmgr >/dev/null 2>&1
+
+# Check if pacstrap was successful
+if [ $? -ne 0 ]; then
+  show_dialog --msgbox "\nFailed to install base system. Check /tmp/installer.log for details." 10 60
+  reset_screen
+  exit 1
+fi
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Chroot into the new system and configure it
+# Configure the system inside chroot
 arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
 ln -sf /usr/share/zoneinfo/"$timezone" /etc/localtime
@@ -222,12 +232,13 @@ echo "root:$root_password" | arch-chroot /mnt chpasswd
 # Offer to install NetworkManager
 show_dialog --yesno "\nWould you like to install NetworkManager for network management?" 10 60
 if [ $? -eq 0 ]; then
+  show_dialog --infobox "\nInstalling NetworkManager..." 5 60
   arch-chroot /mnt pacman -Sy --noconfirm networkmanager >/dev/null 2>&1
-  arch-chroot /mnt systemctl enable NetworkManager
+  arch-chroot /mnt systemctl enable NetworkManager >/dev/null 2>&1
 fi
 
 # Install rEFInd bootloader with Btrfs support and tweaks
-show_dialog --infobox "\nInstalling rEFInd bootloader..." 10 60
+show_dialog --infobox "\nInstalling rEFInd bootloader..." 7 60
 arch-chroot /mnt pacman -Sy --noconfirm refind >/dev/null 2>&1
 
 # Ensure refind-install is available
@@ -255,16 +266,17 @@ else
   initrd_line="initrd=@\\boot\\initramfs-%v.img"
 fi
 
-cat << EOF > /mnt/boot/refind_linux.conf
-"Boot with standard options"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line"
-EOF
+arch-chroot /mnt bash -c "cat << EOF > /mnt/boot/refind_linux.conf
+\"Boot with standard options\"  \"root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line\"
+EOF"
 
 # Copy refind_linux.conf to rEFInd directory
-cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
+cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/ >/dev/null 2>&1
 
-# Ask if the user wants to use bash or install zsh (moved after bootloader setup)
+# Ask if the user wants to use bash or install zsh
 show_dialog --yesno "\nWould you like to use Zsh as your default shell instead of Bash?" 10 60
 if [ $? -eq 0 ]; then
+  show_dialog --infobox "\nInstalling Zsh..." 5 60
   arch-chroot /mnt pacman -Sy --noconfirm zsh >/dev/null 2>&1
   arch-chroot /mnt chsh -s /bin/zsh root >/dev/null 2>&1
   shell_config_file="/root/.zshrc"
@@ -308,7 +320,7 @@ EOF
 
 # Remove the script and its call from the shell configuration file
 rm -- "\$0"
-sed -i '/first_login.sh/d' ~/.'"$(basename "$shell_config_file")"'
+sed -i '/first_login.sh/d' ~/"$(basename "$shell_config_file")"
 EOM"
 
 # Make the script executable
