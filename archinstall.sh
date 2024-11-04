@@ -11,8 +11,11 @@ timedatectl set-ntp true
 dialog --title "Arch Linux Automated Installer" --msgbox "Welcome to the Arch Linux Automated Installer." 10 60
 
 # Disk Selection
-disks_list=$(lsblk -d -e 7,11 -o NAME,SIZE -n | awk '{print "/dev/"$1" "$2" OFF"}')
-IFS=$'\n' read -d '' -r -a disks_array <<< "$disks_list"
+disks_array=()
+while read -r name size; do
+    disks_array+=("/dev/$name" "$size" "OFF")
+done < <(lsblk -d -e 7,11 -o NAME,SIZE -n)
+
 DISK=$(dialog --stdout --title "Select Disk" --radiolist "Choose the disk to install Arch Linux:" 15 60 4 "${disks_array[@]}")
 
 if [ -z "$DISK" ]; then
