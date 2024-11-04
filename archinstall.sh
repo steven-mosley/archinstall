@@ -50,7 +50,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Recommend BTRFS partition layout
-dialog --title "Partition Layout" --msgbox "Recommended BTRFS partition layout:\n\n- EFI System Partition (ESP): /mnt/efi\n- BTRFS subvolumes:\n  - @ mounted at /\n  - @home mounted at /home\n  - @pkg mounted at /var/cache/pacman/pkg\n  - @log mounted at /var/log\n  - @snapshots mounted at /.snapshots" 15 70
+dialog --title "Partition Layout" --msgbox "Recommended BTRFS partition layout:\n\n- EFI System Partition (ESP): /boot\n- BTRFS subvolumes:\n  - @ mounted at /\n  - @home mounted at /home\n  - @pkg mounted at /var/cache/pacman/pkg\n  - @log mounted at /var/log\n  - @snapshots mounted at /.snapshots" 15 70
 
 dialog --yesno "Do you want to use the recommended BTRFS layout?" 7 50
 if [ $? -ne 0 ]; then
@@ -106,15 +106,14 @@ umount /mnt
 MOUNT_OPTIONS="noatime,compress=zstd,discard=async,space_cache=v2"
 
 mount -o $MOUNT_OPTIONS,subvol=@ $ROOT_PART /mnt
-mkdir -p /mnt/{home,var/cache/pacman/pkg,var/log,.snapshots}
+mkdir -p /mnt/{boot,home,var/cache/pacman/pkg,var/log,.snapshots}
 mount -o $MOUNT_OPTIONS,subvol=@home $ROOT_PART /mnt/home
 mount -o $MOUNT_OPTIONS,subvol=@pkg $ROOT_PART /mnt/var/cache/pacman/pkg
 mount -o $MOUNT_OPTIONS,subvol=@log $ROOT_PART /mnt/var/log
 mount -o $MOUNT_OPTIONS,subvol=@snapshots $ROOT_PART /mnt/.snapshots
 
-# Mount the EFI partition
-mkdir -p /mnt/efi
-mount $ESP /mnt/efi
+# Mount the EFI partition at /boot
+mount $ESP /mnt/boot
 
 # CPU Microcode
 dialog --infobox "Detecting CPU type..." 5 40
@@ -384,28 +383,30 @@ fi
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # Copy variables to a temporary file to use inside chroot
-echo "TIMEZONE='$TIMEZONE'" > /mnt/tmp/vars.sh
-echo "HOSTNAME='$HOSTNAME'" >> /mnt/tmp/vars.sh
-echo "MINIMAL_INSTALL='$MINIMAL_INSTALL'" >> /mnt/tmp/vars.sh
-echo "ENABLE_NM='$ENABLE_NM'" >> /mnt/tmp/vars.sh
-echo "ENABLE_GUI='$ENABLE_GUI'" >> /mnt/tmp/vars.sh
-echo "DISPLAY_MANAGER='$DISPLAY_MANAGER'" >> /mnt/tmp/vars.sh
-echo "VIDEO_DRIVER='$VIDEO_DRIVER'" >> /mnt/tmp/vars.sh
-echo "ENABLE_MULTILIB='$ENABLE_MULTILIB'" >> /mnt/tmp/vars.sh
-echo "USE_ZRAM='$USE_ZRAM'" >> /mnt/tmp/vars.sh
-echo "MICROCODE_IMG='$MICROCODE_IMG'" >> /mnt/tmp/vars.sh
-echo "PARTUUID='$PARTUUID'" >> /mnt/tmp/vars.sh
-echo "CREATE_USER='$CREATE_USER'" >> /mnt/tmp/vars.sh
-echo "USERNAME='$USERNAME'" >> /mnt/tmp/vars.sh
-echo "ADD_TO_WHEEL='$ADD_TO_WHEEL'" >> /mnt/tmp/vars.sh
+cat <<EOT > /mnt/tmp/vars.sh
+TIMEZONE='$TIMEZONE'
+HOSTNAME='$HOSTNAME'
+MINIMAL_INSTALL='$MINIMAL_INSTALL'
+ENABLE_NM='$ENABLE_NM'
+ENABLE_GUI='$ENABLE_GUI'
+DISPLAY_MANAGER='$DISPLAY_MANAGER'
+VIDEO_DRIVER='$VIDEO_DRIVER'
+ENABLE_MULTILIB='$ENABLE_MULTILIB'
+USE_ZRAM='$USE_ZRAM'
+MICROCODE_IMG='$MICROCODE_IMG'
+PARTUUID='$PARTUUID'
+CREATE_USER='$CREATE_USER'
+USERNAME='$USERNAME'
+ADD_TO_WHEEL='$ADD_TO_WHEEL'
+EOT
 
 # Chroot into the new system and perform configurations
-arch-chroot /mnt /bin/bash <<'EOF'
+arch-chroot /mnt /bin/bash <<EOF
 # Load variables
 source /tmp/vars.sh
 
 # Set the time zone
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+ln -sf /usr/share/zoneinfo/"$TIMEZONE" /etc/localtime
 hwclock --systohc
 
 # Localization
@@ -415,14 +416,16 @@ echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
 # Network configuration
 echo "$HOSTNAME" > /etc/hostname
-echo -e "127.0.0.1\tlocalhost
-::1\t\tlocalhost
-127.0.1.1\t$HOSTNAME.localdomain\t$HOSTNAME" >> /etc/hosts
+cat <<EOL >> /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain   $HOSTNAME
+EOL
 
 # Enable multilib repository if selected
-if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
+if [[ "\$ENABLE_MULTILIB" == "yes" ]]; then
     echo "Enabling multilib repository..."
-    sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
+    sed -i '/\\[multilib\\]/,/Include/ s/^#//' /etc/pacman.conf
     pacman -Sy
 fi
 
@@ -433,36 +436,36 @@ pacman -S --noconfirm refind
 refind-install
 
 # Update refind.conf
-sed -i 's/^#extra_kernel_version_strings.*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /efi/EFI/refind/refind.conf
+sed -i 's/^#extra_kernel_version_strings.*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/EFI/refind/refind.conf
 
 # Enable mouse in rEFInd
-sed -i 's/^#enable_mouse/enable_mouse/' /efi/EFI/refind/refind.conf
+sed -i 's/^#enable_mouse/enable_mouse/' /boot/EFI/refind/refind.conf
 
 # Set mouse speed to 8
-sed -i 's/^#mouse_speed.*/mouse_speed 8/' /efi/EFI/refind/refind.conf
+sed -i 's/^#mouse_speed.*/mouse_speed 8/' /boot/EFI/refind/refind.conf
 
 # Set resolution to max
-sed -i 's/^#resolution max/resolution max/' /efi/EFI/refind/refind.conf
+sed -i 's/^#resolution max/resolution max/' /boot/EFI/refind/refind.conf
 
 # Enable NetworkManager if installed
-if [[ "$MINIMAL_INSTALL" == "no" && "$ENABLE_NM" == "yes" ]]; then
+if [[ "\$MINIMAL_INSTALL" == "no" && "\$ENABLE_NM" == "yes" ]]; then
     systemctl enable NetworkManager
 fi
 
 # Enable graphical target if GUI is installed
-if [[ "$MINIMAL_INSTALL" == "no" && "$ENABLE_GUI" == "yes" ]]; then
+if [[ "\$MINIMAL_INSTALL" == "no" && "\$ENABLE_GUI" == "yes" ]]; then
     systemctl set-default graphical.target
     # Enable display manager
-    systemctl enable $DISPLAY_MANAGER
+    systemctl enable \$DISPLAY_MANAGER
 fi
 
 # If VirtualBox guest utils are installed, enable the service
-if [[ "$VIDEO_DRIVER" == "virtualbox-guest-utils" ]]; then
+if [[ "\$VIDEO_DRIVER" == "virtualbox-guest-utils" ]]; then
     systemctl enable vboxservice
 fi
 
 # Configure zram if selected
-if [[ "$USE_ZRAM" == "yes" ]]; then
+if [[ "\$USE_ZRAM" == "yes" ]]; then
     echo "Configuring zram swap..."
     cat <<EOLZRAM > /etc/systemd/zram-generator.conf
 [zram0]
@@ -476,13 +479,13 @@ echo "Please set the root password."
 passwd root
 
 # Create user if selected
-if [[ "$CREATE_USER" == "yes" ]]; then
-    useradd -m $USERNAME
-    echo "Please set the password for user $USERNAME."
-    passwd $USERNAME
+if [[ "\$CREATE_USER" == "yes" ]]; then
+    useradd -m "\$USERNAME"
+    echo "Please set the password for user \$USERNAME."
+    passwd "\$USERNAME"
 
-    if [[ "$ADD_TO_WHEEL" == "yes" ]]; then
-        usermod -aG wheel $USERNAME
+    if [[ "\$ADD_TO_WHEEL" == "yes" ]]; then
+        usermod -aG wheel "\$USERNAME"
         # Enable sudo for wheel group
         sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
     fi
@@ -495,10 +498,10 @@ EOF
 
 # Configure /boot/refind_linux.conf with expanded variables and additional boot options
 cat <<EOL > /mnt/boot/refind_linux.conf
-"Boot with standard options"        "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img"
-"Boot with fallback initramfs"      "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v-fallback.img"
-"Boot to terminal (multi-user)"     "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img systemd.unit=multi-user.target"
-"Boot to single user mode"          "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img single"
+"Boot with standard options"        "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=\\$MICROCODE_IMG initrd=\\initramfs-%v.img"
+"Boot with fallback initramfs"      "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=\\$MICROCODE_IMG initrd=\\initramfs-%v-fallback.img"
+"Boot to terminal (multi-user)"     "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=\\$MICROCODE_IMG initrd=\\initramfs-%v.img systemd.unit=multi-user.target"
+"Boot to single user mode"          "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=\\$MICROCODE_IMG initrd=\\initramfs-%v.img single"
 EOL
 
 # Ask the user if they'd like to chroot into the system or reboot
@@ -506,9 +509,15 @@ dialog --yesno "Installation complete. Would you like to chroot into the new sys
 if [ $? -eq 0 ]; then
     dialog --msgbox "You are now entering the chroot environment. Type 'exit' to exit the chroot." 7 60
     clear
-    # Use exec to replace the current shell with arch-chroot
-    exec arch-chroot /mnt
-    # The script ends here when using exec
+    arch-chroot /mnt
+    # After exiting chroot, ask if the user wants to reboot
+    dialog --yesno "Would you like to reboot now?" 7 40
+    if [ $? -eq 0 ]; then
+        umount -R /mnt
+        reboot
+    else
+        dialog --msgbox "You can reboot later by typing 'reboot'. Remember to unmount the partitions if necessary." 7 70
+    fi
 else
     # Unmount partitions
     umount -R /mnt
