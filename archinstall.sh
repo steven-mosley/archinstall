@@ -137,9 +137,11 @@ fi
     exit 1
   fi
   # Shrink Windows partition
-  dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
+  
+fi
+
+dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
   parted $disk resizepart ${windows_partition##*p} -${arch_space}G
-else
   dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 7 50
   if [ $? -ne 0 ]; then
     dialog --msgbox "Installation cancelled." 5 40
