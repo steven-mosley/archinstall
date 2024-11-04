@@ -262,16 +262,26 @@ EOM
 fi
 EOF
 
+# Set root password
+while true; do
+  root_password=$(dialog --no-cancel --insecure --passwordbox "Enter root password:" 8 40 3>&1 1>&2 2>&3 3>&-)
+  root_password_confirm=$(dialog --no-cancel --insecure --passwordbox "Confirm root password:" 8 40 3>&1 1>&2 2>&3 3>&-)
+  if [ "$root_password" = "$root_password_confirm" ]; then
+    break
+  else
+    dialog --msgbox "Passwords do not match. Please try again." 6 40
+  fi
+done
+
+# Set the root password in the chroot environment
+echo "root:$root_password" | arch-chroot /mnt chpasswd
+
 # Offer to install NetworkManager
 dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
 if [ $? -eq 0 ]; then
   arch-chroot /mnt pacman -Sy --noconfirm networkmanager
   arch-chroot /mnt systemctl enable NetworkManager
 fi
-
-# Set root password
-dialog --msgbox "You will now set the root password." 6 40
-arch-chroot /mnt passwd
 
 # Ask if the user wants to use bash or install zsh
 dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
@@ -363,5 +373,3 @@ else
   # Drop to the terminal
   clear
 fi
-
-# good
