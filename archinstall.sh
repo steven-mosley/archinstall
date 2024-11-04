@@ -50,7 +50,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Recommend BTRFS partition layout
-dialog --title "Partition Layout" --msgbox "Recommended BTRFS partition layout:\n\n- EFI System Partition (ESP): /boot\n- BTRFS subvolumes:\n  - @ mounted at /\n  - @home mounted at /home\n  - @pkg mounted at /var/cache/pacman/pkg\n  - @log mounted at /var/log\n  - @snapshots mounted at /.snapshots" 15 70
+dialog --title "Partition Layout" --msgbox "Recommended BTRFS partition layout:\n\n- EFI System Partition (ESP): /boot/efi\n- BTRFS subvolumes:\n  - @ mounted at /\n  - @home mounted at /home\n  - @pkg mounted at /var/cache/pacman/pkg\n  - @log mounted at /var/log\n  - @snapshots mounted at /.snapshots" 15 70
 
 dialog --yesno "Do you want to use the recommended BTRFS layout?" 7 50
 if [ $? -ne 0 ]; then
@@ -106,14 +106,15 @@ umount /mnt
 MOUNT_OPTIONS="noatime,compress=zstd,discard=async,space_cache=v2"
 
 mount -o $MOUNT_OPTIONS,subvol=@ $ROOT_PART /mnt
-mkdir -p /mnt/{boot,home,var/cache/pacman/pkg,var/log,.snapshots}
+mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
+
 mount -o $MOUNT_OPTIONS,subvol=@home $ROOT_PART /mnt/home
 mount -o $MOUNT_OPTIONS,subvol=@pkg $ROOT_PART /mnt/var/cache/pacman/pkg
 mount -o $MOUNT_OPTIONS,subvol=@log $ROOT_PART /mnt/var/log
 mount -o $MOUNT_OPTIONS,subvol=@snapshots $ROOT_PART /mnt/.snapshots
 
-# Mount the EFI partition at /boot
-mount $ESP /mnt/boot
+# Mount the EFI partition at /boot/efi
+mount $ESP /mnt/boot/efi
 
 # CPU Microcode
 dialog --infobox "Detecting CPU type..." 5 40
@@ -382,6 +383,11 @@ fi
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
+# Bind mount necessary filesystems
+for dir in dev proc sys run; do
+    mount --bind /$dir /mnt/$dir
+done
+
 # Copy variables to a temporary file to use inside chroot
 cat <<EOT > /mnt/tmp/vars.sh
 TIMEZONE='$TIMEZONE'
@@ -405,6 +411,9 @@ arch-chroot /mnt /bin/bash <<EOF
 # Load variables
 source /tmp/vars.sh
 
+# Mount efivars for UEFI bootloader installation
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+
 # Set the time zone
 ln -sf /usr/share/zoneinfo/"$TIMEZONE" /etc/localtime
 hwclock --systohc
@@ -423,9 +432,9 @@ cat <<EOL >> /etc/hosts
 EOL
 
 # Enable multilib repository if selected
-if [[ "\$ENABLE_MULTILIB" == "yes" ]]; then
+if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
     echo "Enabling multilib repository..."
-    sed -i '/\\[multilib\\]/,/Include/ s/^#//' /etc/pacman.conf
+    sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
     pacman -Sy
 fi
 
@@ -436,36 +445,36 @@ pacman -S --noconfirm refind
 refind-install
 
 # Update refind.conf
-sed -i 's/^#extra_kernel_version_strings.*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/EFI/refind/refind.conf
+sed -i 's/^#extra_kernel_version_strings.*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/efi/EFI/refind/refind.conf
 
 # Enable mouse in rEFInd
-sed -i 's/^#enable_mouse/enable_mouse/' /boot/EFI/refind/refind.conf
+sed -i 's/^#enable_mouse/enable_mouse/' /boot/efi/EFI/refind/refind.conf
 
 # Set mouse speed to 8
-sed -i 's/^#mouse_speed.*/mouse_speed 8/' /boot/EFI/refind/refind.conf
+sed -i 's/^#mouse_speed.*/mouse_speed 8/' /boot/efi/EFI/refind/refind.conf
 
 # Set resolution to max
-sed -i 's/^#resolution max/resolution max/' /boot/EFI/refind/refind.conf
+sed -i 's/^#resolution max/resolution max/' /boot/efi/EFI/refind/refind.conf
 
 # Enable NetworkManager if installed
-if [[ "\$MINIMAL_INSTALL" == "no" && "\$ENABLE_NM" == "yes" ]]; then
+if [[ "$MINIMAL_INSTALL" == "no" && "$ENABLE_NM" == "yes" ]]; then
     systemctl enable NetworkManager
 fi
 
 # Enable graphical target if GUI is installed
-if [[ "\$MINIMAL_INSTALL" == "no" && "\$ENABLE_GUI" == "yes" ]]; then
+if [[ "$MINIMAL_INSTALL" == "no" && "$ENABLE_GUI" == "yes" ]]; then
     systemctl set-default graphical.target
     # Enable display manager
-    systemctl enable \$DISPLAY_MANAGER
+    systemctl enable $DISPLAY_MANAGER
 fi
 
 # If VirtualBox guest utils are installed, enable the service
-if [[ "\$VIDEO_DRIVER" == "virtualbox-guest-utils" ]]; then
+if [[ "$VIDEO_DRIVER" == "virtualbox-guest-utils" ]]; then
     systemctl enable vboxservice
 fi
 
 # Configure zram if selected
-if [[ "\$USE_ZRAM" == "yes" ]]; then
+if [[ "$USE_ZRAM" == "yes" ]]; then
     echo "Configuring zram swap..."
     cat <<EOLZRAM > /etc/systemd/zram-generator.conf
 [zram0]
@@ -479,13 +488,13 @@ echo "Please set the root password."
 passwd root
 
 # Create user if selected
-if [[ "\$CREATE_USER" == "yes" ]]; then
-    useradd -m "\$USERNAME"
-    echo "Please set the password for user \$USERNAME."
-    passwd "\$USERNAME"
+if [[ "$CREATE_USER" == "yes" ]]; then
+    useradd -m "$USERNAME"
+    echo "Please set the password for user $USERNAME."
+    passwd "$USERNAME"
 
-    if [[ "\$ADD_TO_WHEEL" == "yes" ]]; then
-        usermod -aG wheel "\$USERNAME"
+    if [[ "$ADD_TO_WHEEL" == "yes" ]]; then
+        usermod -aG wheel "$USERNAME"
         # Enable sudo for wheel group
         sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
     fi
@@ -493,6 +502,9 @@ fi
 
 # Remove temporary variables file
 rm /tmp/vars.sh
+
+# Unmount efivars
+umount /sys/firmware/efi/efivars
 
 EOF
 
@@ -503,6 +515,14 @@ cat <<EOL > /mnt/boot/refind_linux.conf
 "Boot to terminal (multi-user)"     "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=\\$MICROCODE_IMG initrd=\\initramfs-%v.img systemd.unit=multi-user.target"
 "Boot to single user mode"          "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=\\$MICROCODE_IMG initrd=\\initramfs-%v.img single"
 EOL
+
+# Copy refind_linux.conf to the refind directory
+cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
+
+# Unmount bound filesystems
+for dir in dev proc sys run; do
+    umount /mnt/$dir
+done
 
 # Ask the user if they'd like to chroot into the system or reboot
 dialog --yesno "Installation complete. Would you like to chroot into the new system?" 7 60
