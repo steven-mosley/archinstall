@@ -3,10 +3,14 @@
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
 # WARNING: This script will erase the selected disk.
 
+# Enable logging for debugging purposes
+exec > >(tee -i /tmp/installer.log)
+exec 2>&1
+
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root."
-  exit
+  exit 1
 fi
 
 # Install dialog if not already installed
@@ -224,17 +228,25 @@ else
   zram_pkg=""
 fi
 
-# Install base system
+# Install base system with essential packages
 dialog --infobox "Installing base system..." 5 40
-pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg
+if ! pacstrap /mnt base linux linux-firmware shadow $microcode_pkg $btrfs_pkg $zram_pkg; then
+  dialog --msgbox "Failed to install base system. Check /tmp/installer.log for details." 6 50
+  exit 1
+fi
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
+# Export variables for chroot
+export hostname
+export timezone
+export zram_pkg
+
 # Chroot into the new system
 arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
-ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
+ln -sf /usr/share/zoneinfo/"$timezone" /etc/localtime
 hwclock --systohc
 
 # Set the hostname
@@ -287,12 +299,20 @@ fi
 dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
 if [ $? -eq 0 ]; then
   arch-chroot /mnt pacman -Sy --noconfirm zsh
-  arch-chroot /mnt chsh -s /bin/zsh
+  arch-chroot /mnt chsh -s /bin/zsh root
 fi
 
 # Install rEFInd bootloader with Btrfs support and tweaks
 dialog --infobox "Installing rEFInd bootloader..." 5 40
 arch-chroot /mnt pacman -Sy --noconfirm refind
+
+# Verify that refind-install is available
+if ! arch-chroot /mnt which refind-install &> /dev/null; then
+  dialog --msgbox "refind-install not found in chroot environment. Installation cannot proceed." 6 60
+  exit 1
+fi
+
+# Proceed with rEFInd installation
 arch-chroot /mnt refind-install
 
 # rEFInd configuration
