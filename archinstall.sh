@@ -5,6 +5,23 @@ if ! command -v dialog &> /dev/null; then
     pacman -Sy --noconfirm dialog
 fi
 
+# Clear the screen
+clear
+
+# Check for UEFI mode
+if [ ! -d /sys/firmware/efi/efivars ]; then
+    dialog --msgbox "Your system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 8 60
+    clear
+    exit 1
+fi
+
+# Check for internet connectivity
+if ! ping -c 1 -W 1 archlinux.org &> /dev/null; then
+    dialog --msgbox "No internet connectivity detected.\nPlease connect to the internet and rerun the installer.\n\nFor assistance, visit:\nhttps://wiki.archlinux.org/title/Installation_guide#Connect_to_the_internet" 12 60
+    clear
+    exit 1
+fi
+
 # Enable NTP synchronization
 timedatectl set-ntp true
 
@@ -101,12 +118,13 @@ mount $ESP /mnt/efi
 
 # CPU Microcode
 dialog --infobox "Detecting CPU type..." 5 40
-CPU_VENDOR=$(lscpu | grep 'Vendor ID' | awk '{print $3}')
 
-if [[ $CPU_VENDOR == "GenuineIntel" ]]; then
+CPU_VENDOR=$(lscpu | awk -F: '/Vendor ID/ {gsub(/^[ \t]+/, "", $2); print $2}')
+
+if [[ "$CPU_VENDOR" == *"GenuineIntel"* ]]; then
     MICROCODE="intel-ucode"
     MICROCODE_IMG="intel-ucode.img"
-elif [[ $CPU_VENDOR == "AuthenticAMD" ]]; then
+elif [[ "$CPU_VENDOR" == *"AuthenticAMD"* ]]; then
     MICROCODE="amd-ucode"
     MICROCODE_IMG="amd-ucode.img"
 else
@@ -235,6 +253,14 @@ if [[ "$MINIMAL_INSTALL" == "no" ]]; then
             exit 1
         fi
 
+        # Ask the user if they'd like to enable the multilib repository
+        dialog --yesno "Would you like to enable the multilib repository?" 7 50
+        if [ $? -eq 0 ]; then
+            ENABLE_MULTILIB="yes"
+        else
+            ENABLE_MULTILIB="no"
+        fi
+
         # Handle Nvidia selection
         if [[ "$VIDEO_DRIVER_CHOICE" == "Nvidia" ]]; then
             NVIDIA_DRIVER_TYPE=$(dialog --stdout --title "Nvidia Driver Type" --menu "Select Nvidia driver type:" 10 50 2 \
@@ -290,12 +316,12 @@ else
 fi
 
 # Ask the user for a hostname
-HOSTNAME=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
+HOSTNAME=$(dialog --stdout --inputbox "Enter a hostname for your system (leave blank for random):" 8 60)
 
 if [ -z "$HOSTNAME" ]; then
-    dialog --msgbox "No hostname entered. Installation cancelled." 7 50
-    clear
-    exit 1
+    # Generate a random hostname
+    HOSTNAME="archlinux-$(openssl rand -hex 4)"
+    dialog --msgbox "No hostname entered. A random hostname has been generated: $HOSTNAME" 7 60
 fi
 
 # Ask the user for their timezone
@@ -305,14 +331,6 @@ if [ -z "$TIMEZONE" ]; then
     dialog --msgbox "No timezone entered. Installation cancelled." 7 50
     clear
     exit 1
-fi
-
-# Ask the user if they'd like to enable the multilib repository
-dialog --yesno "Would you like to enable the multilib repository?" 7 50
-if [ $? -eq 0 ]; then
-    ENABLE_MULTILIB="yes"
-else
-    ENABLE_MULTILIB="no"
 fi
 
 # Ask the user if they'd like to use zram for swap
@@ -343,7 +361,7 @@ fi
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Chroot into the new system
+# Chroot into the new system and perform configurations
 arch-chroot /mnt /bin/bash <<EOF
 # Set the time zone
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
@@ -426,9 +444,24 @@ cat <<EOL > /mnt/boot/refind_linux.conf
 "Boot to single user mode"          "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img single"
 EOL
 
-# Unmount partitions
-umount -R /mnt
-
-dialog --title "Installation Complete" --msgbox "Installation complete. You can reboot now." 7 50
+# Ask the user if they'd like to chroot into the system or reboot
+dialog --yesno "Installation complete. Would you like to chroot into the new system?" 7 60
+if [ $? -eq 0 ]; then
+    dialog --msgbox "You are now entering the chroot environment. Type 'exit' to exit the chroot." 7 60
+    clear
+    arch-chroot /mnt
+    # After exiting chroot, ask if the user wants to reboot
+    dialog --yesno "Would you like to reboot now?" 7 40
+    if [ $? -eq 0 ]; then
+        umount -R /mnt
+        reboot
+    else
+        dialog --msgbox "You can reboot later by typing 'reboot'. Remember to unmount the partitions if necessary." 7 70
+    fi
+else
+    # Unmount partitions
+    umount -R /mnt
+    dialog --title "Installation Complete" --msgbox "Installation complete. You can reboot now." 7 50
+fi
 
 clear
