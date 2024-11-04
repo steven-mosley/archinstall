@@ -79,7 +79,7 @@ fi
 # Format partitions
 dialog --infobox "Formatting partitions..." 5 40
 mkfs.vfat -F32 $esp
-mkfs.btrfs -f -L ArchLinux $root_partition
+mkfs.btrfs -f -L Arch $root_partition
 
 # Mount root partition
 mount $root_partition /mnt
@@ -121,6 +121,22 @@ elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
     microcode_pkg="amd-ucode"
     microcode_img="amd-ucode.img"
   fi
+else
+  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
+fi
+
+# Prompt for hostname
+hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
+if [ -z "$hostname" ]; then
+  dialog --msgbox "No hostname entered. Using default 'archlinux'." 6 50
+  hostname="archlinux"
+fi
+
+# Prompt for timezone
+timezone=$(dialog --stdout --inputbox "Enter your timezone (e.g., 'Region/City', such as 'America/New_York'):" 8 60)
+if [ -z "$timezone" ]; then
+  dialog --msgbox "No timezone entered. Using 'UTC' as default." 6 50
+  timezone="UTC"
 fi
 
 # Offer to install btrfs-progs
@@ -137,6 +153,29 @@ pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
+
+# Chroot into the new system
+arch-chroot /mnt /bin/bash <<EOF
+# Set the timezone
+ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
+hwclock --systohc
+
+# Set the hostname
+echo "$hostname" > /etc/hostname
+
+# Configure /etc/hosts
+cat <<EOL > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $hostname.localdomain $hostname
+EOL
+
+# Generate locales
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+EOF
 
 # Offer to install NetworkManager
 dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
