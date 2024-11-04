@@ -23,14 +23,14 @@ clear
 
 # Check for UEFI mode
 if [ ! -d /sys/firmware/efi/efivars ]; then
-  dialog --msgbox "Your system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 8 60
+  dialog --msgbox "Your system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 0 0
   clear
   exit 1
 fi
 
 # Check internet connection
 if ! ping -c 1 archlinux.org &> /dev/null; then
-  dialog --msgbox "Internet connection is required.\nPlease connect to the internet and rerun the installer." 7 60
+  dialog --msgbox "Internet connection is required.\nPlease connect to the internet and rerun the installer." 0 0
   clear
   exit 1
 fi
@@ -39,14 +39,14 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
-dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, quickly setting up a base system that boots to a terminal." 12 70
+dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, quickly setting up a base system that boots to a terminal." 0 0
 
 # Disk selection
-disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 \
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 0 0 0 \
   $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
 
 if [ -z "$disk" ]; then
-  dialog --msgbox "No disk selected. Exiting." 5 40
+  dialog --msgbox "No disk selected. Exiting." 0 0
   clear
   exit 1
 fi
@@ -58,14 +58,14 @@ min_required_space=$((30 * 1024 * 1024 * 1024)) # Minimum required space is 30GB
 
 if [ -n "$disk_partitions" ]; then
   if [ "$free_space" -ge "$min_required_space" ]; then
-    dialog --yesno "Sufficient unallocated space detected on $disk. Would you like to proceed with using this disk for installation?" 7 60
+    dialog --yesno "Sufficient unallocated space detected on $disk. Would you like to proceed with using this disk for installation?" 0 0
     if [ $? -ne 0 ]; then
-      dialog --msgbox "You can select another disk for installation." 6 50
+      dialog --msgbox "You can select another disk for installation." 0 0
       # Code to select another disk
-      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 \
+      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 0 0 0 \
         $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
       if [ -z "$disk" ]; then
-        dialog --msgbox "No disk selected. Exiting." 5 40
+        dialog --msgbox "No disk selected. Exiting." 0 0
         clear
         exit 1
       fi
@@ -78,39 +78,39 @@ if [ -n "$disk_partitions" ]; then
       sgdisk -n 2:0:0 -t 2:8300 "$disk"
     fi
   else
-    dialog --msgbox "Windows partitions detected on $disk. You can choose to install Arch Linux alongside Windows." 10 60
+    dialog --msgbox "Windows partitions detected on $disk. You can choose to install Arch Linux alongside Windows." 0 0
     # Ask user if they want to proceed with dual boot
-    dialog --yesno "Would you like to install Arch Linux alongside Windows by shrinking an existing partition?" 7 50
+    dialog --yesno "Would you like to install Arch Linux alongside Windows by shrinking an existing partition?" 0 0
     if [ $? -ne 0 ]; then
-      dialog --msgbox "You can select another disk for installation." 6 50
+      dialog --msgbox "You can select another disk for installation." 0 0
       # Code to select another disk
-      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 \
+      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 0 0 0 \
         $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
       if [ -z "$disk" ]; then
-        dialog --msgbox "No disk selected. Exiting." 5 40
+        dialog --msgbox "No disk selected. Exiting." 0 0
         clear
         exit 1
       fi
     else
       # Prompt user to select the Windows partition
       windows_partition=$(dialog --stdout --title "Select Windows Partition" --menu \
-        "Select the main Windows partition to resize:" 15 60 4 \
+        "Select the main Windows partition to resize:" 0 0 0 \
         $(lsblk -rn -o NAME,SIZE,FSTYPE "$disk" | grep ntfs | awk '{print $1 " " $2}'))
       if [ -z "$windows_partition" ]; then
-        dialog --msgbox "No Windows partition selected. Exiting." 5 40
+        dialog --msgbox "No Windows partition selected. Exiting." 0 0
         clear
         exit 1
       fi
       windows_partition="${disk}${windows_partition}"
       # Ask user how much space to allocate for Arch Linux
-      arch_space=$(dialog --stdout --inputbox "Enter the amount of space (in GB) you want to allocate for Arch Linux:" 8 40)
+      arch_space=$(dialog --stdout --inputbox "Enter the amount of space (in GB) you want to allocate for Arch Linux:" 0 0)
       if [ -z "$arch_space" ]; then
-        dialog --msgbox "No space entered. Exiting." 5 40
+        dialog --msgbox "No space entered. Exiting." 0 0
         clear
         exit 1
       fi
       # Shrink Windows partition
-      dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
+      dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 0 0
       parted "$disk" resizepart "${windows_partition##*p}" "-${arch_space}G"
       # Create partitions
       sgdisk -n 1:0:+550M -t 1:ef00 "$disk"
@@ -118,14 +118,14 @@ if [ -n "$disk_partitions" ]; then
     fi
   fi
 else
-  dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 7 50
+  dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 0 0
   if [ $? -ne 0 ]; then
-    dialog --msgbox "You can select another disk for installation." 6 50
+    dialog --msgbox "You can select another disk for installation." 0 0
     # Code to select another disk
-    disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 \
+    disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 0 0 0 \
       $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
     if [ -z "$disk" ]; then
-      dialog --msgbox "No disk selected. Exiting." 5 40
+      dialog --msgbox "No disk selected. Exiting." 0 0
       clear
       exit 1
     fi
@@ -148,7 +148,7 @@ else
 fi
 
 # Format partitions
-dialog --infobox "Formatting partitions..." 5 40
+dialog --infobox "Formatting partitions..." 0 0
 mkfs.vfat -F32 "$esp"
 mkfs.btrfs -f -L Arch "$root_partition"
 
@@ -182,40 +182,40 @@ microcode_pkg=""
 microcode_img=""
 
 if [[ "$cpu_vendor" == *"intel"* ]]; then
-  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
+  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 0 0
   if [ $? -eq 0 ]; then
     microcode_pkg="intel-ucode"
     microcode_img="intel-ucode.img"
   fi
 elif [[ "$cpu_vendor" == *"amd"* ]]; then
-  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
+  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 0 0
   if [ $? -eq 0 ]; then
     microcode_pkg="amd-ucode"
     microcode_img="amd-ucode.img"
   fi
 else
-  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
+  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 0 0
 fi
 
 # Prompt for hostname
-hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
+hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 0 0)
 if [ -z "$hostname" ]; then
-  dialog --msgbox "No hostname entered. Using default 'archlinux'." 6 50
+  dialog --msgbox "No hostname entered. Using default 'archlinux'." 0 0
   hostname="archlinux"
 fi
 
 # Prompt for timezone
-timezone=$(dialog --stdout --title "Select Timezone" --menu "Select your timezone:" 20 60 15 \
-  $(timedatectl list-timezones | awk '{print NR " " $1}'))
-if [ -z "$timezone" ]; then
-  dialog --msgbox "No timezone selected. Using 'UTC' as default." 6 50
+timezones=($(timedatectl list-timezones))
+timezone_selection=$(dialog --stdout --menu "Select your timezone:" 0 0 0 "${!timezones[@]}" "${timezones[@]}")
+if [ -z "$timezone_selection" ]; then
+  dialog --msgbox "No timezone selected. Using 'UTC' as default." 0 0
   timezone="UTC"
 else
-  timezone=$(timedatectl list-timezones | sed -n "${timezone}p")
+  timezone="${timezones[$timezone_selection]}"
 fi
 
 # Offer to install btrfs-progs
-dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
+dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 0 0
 if [ $? -eq 0 ]; then
   btrfs_pkg="btrfs-progs"
 else
@@ -223,7 +223,7 @@ else
 fi
 
 # Offer to enable ZRAM
-dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
+dialog --yesno "Would you like to enable ZRAM for swap?" 0 0
 if [ $? -eq 0 ]; then
   zram_pkg="zram-generator"
 else
@@ -231,9 +231,9 @@ else
 fi
 
 # Install base system with essential packages
-dialog --infobox "Installing base system..." 5 40
-if ! pacstrap /mnt base linux linux-firmware shadow $microcode_pkg $btrfs_pkg $zram_pkg; then
-  dialog --msgbox "Failed to install base system. Check /tmp/installer.log for details." 6 50
+dialog --infobox "Installing base system..." 0 0
+if ! pacstrap /mnt base linux linux-firmware shadow $microcode_pkg $btrfs_pkg $zram_pkg efibootmgr; then
+  dialog --msgbox "Failed to install base system. Check /tmp/installer.log for details." 0 0
   exit 1
 fi
 
@@ -278,12 +278,12 @@ EOF
 
 # Set root password
 while true; do
-  root_password=$(dialog --no-cancel --insecure --passwordbox "Enter root password:" 8 40 3>&1 1>&2 2>&3 3>&-)
-  root_password_confirm=$(dialog --no-cancel --insecure --passwordbox "Confirm root password:" 8 40 3>&1 1>&2 2>&3 3>&-)
+  root_password=$(dialog --no-cancel --passwordbox "Enter root password:" 0 0 3>&1 1>&2 2>&3 3>&-)
+  root_password_confirm=$(dialog --no-cancel --passwordbox "Confirm root password:" 0 0 3>&1 1>&2 2>&3 3>&-)
   if [ "$root_password" = "$root_password_confirm" ]; then
     break
   else
-    dialog --msgbox "Passwords do not match. Please try again." 6 40
+    dialog --msgbox "Passwords do not match. Please try again." 0 0
   fi
 done
 
@@ -291,26 +291,26 @@ done
 echo "root:$root_password" | arch-chroot /mnt chpasswd
 
 # Offer to install NetworkManager
-dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
+dialog --yesno "Would you like to install NetworkManager for network management?" 0 0
 if [ $? -eq 0 ]; then
   arch-chroot /mnt pacman -Sy --noconfirm networkmanager
   arch-chroot /mnt systemctl enable NetworkManager
 fi
 
 # Ask if the user wants to use bash or install zsh
-dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
+dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 0 0
 if [ $? -eq 0 ]; then
   arch-chroot /mnt pacman -Sy --noconfirm zsh
   arch-chroot /mnt chsh -s /bin/zsh root
 fi
 
 # Install rEFInd bootloader with Btrfs support and tweaks
-dialog --infobox "Installing rEFInd bootloader..." 5 40
-arch-chroot /mnt pacman -Sy --noconfirm refind
+dialog --infobox "Installing rEFInd bootloader..." 0 0
+arch-chroot /mnt pacman -Sy --noconfirm refind efibootmgr
 
 # Verify that refind-install is available
 if ! arch-chroot /mnt which refind-install &> /dev/null; then
-  dialog --msgbox "refind-install not found in chroot environment. Installation cannot proceed." 6 60
+  dialog --msgbox "refind-install not found in chroot environment. Installation cannot proceed." 0 0
   exit 1
 fi
 
@@ -386,7 +386,7 @@ chmod +x /mnt/root/first_login.sh
 echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
 
 # Finish
-dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 10 70
+dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 0 0
 if [ $? -eq 0 ]; then
   # Reboot the system
   umount -R /mnt
@@ -395,4 +395,3 @@ else
   # Drop to the terminal
   clear
 fi
-# yisssss
