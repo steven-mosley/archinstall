@@ -223,30 +223,30 @@ cat << 'EOM' > /mnt/root/first_login.sh
 
 clear
 cat << 'EOF'
-Welcome to your new Arch Linux system!
+Welcome to your new Arch Linux system! Right now your Arch Linux install is just a barebones install containing only the base system, processor microcode for your CPU, the Linux kermel, and a bootloader.
 
 To create a new user and grant sudo privileges, follow these steps:
 
-1. Create a new user (replace 'username' with your desired username):
-   useradd -m username
+1. Install a text editor (e.g., nano, vim, or emacs) if needed:
+   pacman -Sy nano or pacman -Sy vim or pacman -Sy emacs
 
-2. Set the password for the new user:
+2. Create a new user (replace 'username' with your desired username):
+   useradd -m username
+   
+3. Set the password for the new user:
    passwd username
 
-3. Install sudo (if not already installed):
+4. Install sudo (if not already installed):
    pacman -Sy sudo
 
-4. Add the user to the wheel group:
+5. Add the user to the wheel group:
    usermod -aG wheel username
 
-5. Edit the sudoers file to grant sudo privileges:
+6. Edit the sudoers file to grant sudo privileges:
    EDITOR=nano visudo
 
    Uncomment the line:
    %wheel ALL=(ALL) ALL
-
-6. Install a text editor (e.g., nano, vim, or emacs) if needed:
-   pacman -Sy nano
 
 You're all set!
 
