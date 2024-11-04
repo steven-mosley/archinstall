@@ -34,8 +34,8 @@ fi
 # Set time synchronization
 timedatectl set-ntp true
 
-# Welcome message
-dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer." 8 60
+# Welcome message with extended information
+dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, quickly setting up a base system that boots to a terminal." 12 70
 
 # Disk selection
 disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:\nWARNING: All data on the disk will be erased!" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
@@ -106,7 +106,7 @@ mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $r
 mount $esp /mnt/boot/efi
 
 # Detect CPU and offer to install microcode
-cpu_vendor=$(lscpu | awk -F: '/Vendor ID/{gsub(/^[ \t]+/, "", $2); print $2}')
+cpu_vendor=$(lscpu | grep "Vendor ID:" | awk '{print $3}')
 microcode_pkg=""
 microcode_img=""
 if [[ "$cpu_vendor" == "GenuineIntel" ]]; then
@@ -184,38 +184,9 @@ if [ $? -eq 0 ]; then
   arch-chroot /mnt systemctl enable NetworkManager
 fi
 
-# Offer to install a text editor
-editor_choice=$(dialog --stdout --title "Text Editor" --menu "Choose a text editor to install:" 10 50 3 \
-  "nano" "Simple text editor" \
-  "vim" "Vi Improved" \
-  "emacs" "Extensible editor")
-if [ -n "$editor_choice" ]; then
-  arch-chroot /mnt pacman -Sy --noconfirm $editor_choice
-fi
-
 # Set root password
 dialog --msgbox "You will now set the root password." 6 40
 arch-chroot /mnt passwd
-
-# Offer to create a standard user
-dialog --yesno "Would you like to create a standard user?" 7 50
-if [ $? -eq 0 ]; then
-  username=$(dialog --stdout --inputbox "Enter username:" 8 40)
-  if [ -n "$username" ]; then
-    arch-chroot /mnt useradd -m $username
-    dialog --msgbox "You will now set the password for $username." 6 50
-    arch-chroot /mnt passwd $username
-    # Install sudo and offer to add user to sudoers
-    arch-chroot /mnt pacman -Sy --noconfirm sudo
-    dialog --yesno "Would you like to grant $username sudo privileges?" 7 50
-    if [ $? -eq 0 ]; then
-      arch-chroot /mnt usermod -aG wheel $username
-      arch-chroot /mnt sed -i '/^# %wheel ALL=(ALL) ALL$/s/^# //' /etc/sudoers
-    fi
-  else
-    dialog --msgbox "No username entered. Skipping user creation." 5 50
-  fi
-fi
 
 # Install rEFInd bootloader with Btrfs support and tweaks
 dialog --infobox "Installing rEFInd bootloader..." 5 40
@@ -245,8 +216,38 @@ EOF
 # Copy refind_linux.conf to rEFInd directory
 cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
 
+# Add post-installation instructions to /etc/motd
+cat << 'EOM' > /mnt/etc/motd
+Welcome to your new Arch Linux system!
+
+To create a new user and grant sudo privileges, follow these steps:
+
+1. Create a new user (replace 'username' with your desired username):
+   useradd -m username
+
+2. Set the password for the new user:
+   passwd username
+
+3. Install sudo (if not already installed):
+   pacman -Sy sudo
+
+4. Add the user to the wheel group:
+   usermod -aG wheel username
+
+5. Edit the sudoers file to grant sudo privileges:
+   EDITOR=nano visudo
+
+   Uncomment the line:
+   %wheel ALL=(ALL) ALL
+
+6. Install a text editor (e.g., nano, vim, or emacs) if needed:
+   pacman -Sy nano
+
+You're all set!
+EOM
+
 # Finish
-dialog --msgbox "Installation complete! You can now reboot into your new system." 6 50
+dialog --msgbox "Installation complete! You can now reboot into your new system.\n\nWhen you log in as root, you will receive instructions on how to create a normal user and grant sudo privileges." 10 70
 
 # Unmount partitions
 umount -R /mnt
