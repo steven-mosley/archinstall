@@ -38,34 +38,123 @@ timedatectl set-ntp true
 dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, quickly setting up a base system that boots to a terminal." 12 70
 
 # Disk selection
-disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:\nWARNING: All data on the disk will be erased!" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
   clear
   exit 1
 fi
 
-# Confirm disk selection
-dialog --yesno "Are you sure you want to erase all data on $disk?" 7 50
+# Detect existing Windows partitions
+disk_partitions=$(lsblk -o NAME,FSTYPE,LABEL,UUID,MOUNTPOINTS $disk | grep -E 'ntfs|FAT32')
+free_space=$(lsblk -b -o NAME,TYPE,FREE $disk | grep "disk" | awk '{print $3}')
+min_required_space=$((30 * 1024 * 1024 * 1024)) # Minimum required space is 30GB
+
+if [ -n "$disk_partitions" ]; then
+  if [ "$free_space" -ge "$min_required_space" ]; then
+    dialog --yesno "Sufficient unallocated space detected on $disk. Would you like to proceed with using this disk for installation?" 7 60
 if [ $? -ne 0 ]; then
-  dialog --msgbox "Installation cancelled." 5 40
-  clear
-  exit 1
+  dialog --msgbox "You can select another disk for installation." 6 50
+  disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+  if [ -z "$disk" ]; then
+    dialog --msgbox "No disk selected. Exiting." 5 40
+    clear
+    exit 1
+  fi
 fi
+  else
+    dialog --msgbox "Windows partitions detected on $disk. You can choose to install Arch Linux alongside Windows." 10 60
+    # Ask user if they want to proceed with dual boot
+    dialog --yesno "Would you like to install Arch Linux alongside Windows by shrinking an existing partition?" 7 50
+    if [ $? -ne 0 ]; then
+      dialog --msgbox "You can select another disk for installation." 6 50
+      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+      if [ -z "$disk" ]; then
+        dialog --msgbox "No disk selected. Exiting." 5 40
+        clear
+        exit 1
+      fi
+    else
+      # Prompt user to select the Windows partition
+      windows_partition=$(dialog --stdout --title "Select Windows Partition" --menu "Select the main Windows partition to resize:" 15 60 4 $(lsblk -rn -o NAME,SIZE,FSTYPE $disk | grep ntfs | awk '{print $1 " " $2}'))
+      if [ -z "$windows_partition" ]; then
+        dialog --msgbox "No Windows partition selected. Exiting." 5 40
+        clear
+        exit 1
+      fi
+      windows_partition="${disk}${windows_partition}"
+      # Ask user how much space to allocate for Arch Linux
+      arch_space=$(dialog --stdout --inputbox "Enter the amount of space (in GB) you want to allocate for Arch Linux:" 8 40)
+      if [ -z "$arch_space" ]; then
+        dialog --msgbox "No space entered. Exiting." 5 40
+        clear
+        exit 1
+      fi
+      # Shrink Windows partition
+      dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
+      parted $disk resizepart ${windows_partition##*p} -${arch_space}G
+    fi
+  fi
+else
+  dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 7 50
+  if [ $? -ne 0 ]; then
+    dialog --msgbox "You can select another disk for installation." 6 50
+    disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+    if [ -z "$disk" ]; then
+      dialog --msgbox "No disk selected. Exiting." 5 40
+      clear
+      exit 1
+    fi
+  fi
+  # Wipe the disk
+  sgdisk --zap-all $disk
 
-# Recommend Btrfs partition layout
-dialog --title "Partition Layout Recommendation" --msgbox "Recommended Btrfs partition layout:\n\n- EFI System Partition (ESP): /boot/efi\n- Btrfs subvolumes:\n  - @ mounted at /\n  - @home mounted at /home\n  - @pkg mounted at /var/cache/pacman/pkg\n  - @log mounted at /var/log\n  - @snapshots mounted at /.snapshots" 15 70
+  # Create partitions
+  # Partition 1: EFI System Partition
+  sgdisk -n 1:0:+550M -t 1:ef00 $disk
+  # Partition 2: Root partition
+  sgdisk -n 2:0:0 -t 2:8300 $disk
+fi
+  # Partition 1: EFI System Partition
+  sgdisk -n 1:0:+550M -t 1:ef00 $disk
+  # Partition 2: Root partition
+  sgdisk -n 2:0:0 -t 2:8300 $disk
+fi
+  fi
+  # Prompt user to select the Windows partition
+  windows_partition=$(dialog --stdout --title "Select Windows Partition" --menu "Select the main Windows partition to resize:" 15 60 4 $(lsblk -rn -o NAME,SIZE,FSTYPE $disk | grep ntfs | awk '{print $1 " " $2}'))
+  if [ -z "$windows_partition" ]; then
+    dialog --msgbox "No Windows partition selected. Exiting." 5 40
+    clear
+    exit 1
+  fi
+  windows_partition="${disk}${windows_partition}"
+  # Ask user how much space to allocate for Arch Linux
+  arch_space=$(dialog --stdout --inputbox "Enter the amount of space (in GB) you want to allocate for Arch Linux:" 8 40)
+  if [ -z "$arch_space" ]; then
+    dialog --msgbox "No space entered. Exiting." 5 40
+    clear
+    exit 1
+  fi
+  # Shrink Windows partition
+  dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
+  parted $disk resizepart ${windows_partition##*p} -${arch_space}G
+else
+  dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 7 50
+  if [ $? -ne 0 ]; then
+    dialog --msgbox "Installation cancelled." 5 40
+    clear
+    exit 1
+  fi
+  # Wipe the disk
+  sgdisk --zap-all $disk
 
-# Partitioning
-dialog --infobox "Partitioning $disk..." 5 40
-# Wipe the disk
-sgdisk --zap-all $disk
-
-# Create partitions
-# Partition 1: EFI System Partition
-sgdisk -n 1:0:+550M -t 1:ef00 $disk
-# Partition 2: Root partition
-sgdisk -n 2:0:0 -t 2:8300 $disk
+  # Create partitions
+  # Partition 1: EFI System Partition
+  sgdisk -n 1:0:+550M -t 1:ef00 $disk
+  # Partition 2: Root partition
+  sgdisk -n 2:0:0 -t 2:8300 $disk
+fi
 
 # Get partition names
 if [[ "$disk" == *"nvme"* ]]; then
@@ -134,9 +223,10 @@ if [ -z "$hostname" ]; then
 fi
 
 # Prompt for timezone
-timezone=$(dialog --stdout --inputbox "Enter your timezone (e.g., 'Region/City', such as 'America/New_York'):" 8 60)
+available_timezones=$(find /usr/share/zoneinfo/ -type f | sed 's#/usr/share/zoneinfo/##')
+timezone=$(dialog --stdout --title "Select Timezone" --menu "Select your timezone:" 20 60 15 $(echo "$available_timezones" | nl -w2 -s" "))
 if [ -z "$timezone" ]; then
-  dialog --msgbox "No timezone entered. Using 'UTC' as default." 6 50
+  dialog --msgbox "No timezone selected. Using 'UTC' as default." 6 50
   timezone="UTC"
 fi
 
