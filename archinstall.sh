@@ -11,7 +11,7 @@ fi
 
 # Install dialog if not already installed
 if ! command -v dialog &> /dev/null; then
-  pacman -Sy --noconfirm dialog
+  pacman -Sy --noconfirm dialog6
 fi
 
 # Clear the screen
