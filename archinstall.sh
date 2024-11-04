@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Arch Linux Minimal Installation Script with Btrfs and rEFInd
+# Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
 # WARNING: This script will erase the selected disk.
 
 # Ensure the script is run as root
@@ -11,7 +11,7 @@ fi
 
 # Install dialog if not already installed
 if ! command -v dialog &> /dev/null; then
-  pacman -Sy --noconfirm dialog6
+  pacman -Sy --noconfirm dialog
 fi
 
 # Clear the screen
@@ -148,9 +148,17 @@ else
   btrfs_pkg=""
 fi
 
+# Offer to enable ZRAM
+dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
+if [ $? -eq 0 ]; then
+  zram_pkg="systemd-zram-generator"
+else
+  zram_pkg=""
+fi
+
 # Install base system
 dialog --infobox "Installing base system..." 5 40
-pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg
+pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -176,6 +184,14 @@ echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
+# Configure ZRAM if enabled
+if [ -n "$zram_pkg" ]; then
+  cat <<EOM > /etc/systemd/zram-generator.conf
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+EOM
+fi
 EOF
 
 # Offer to install NetworkManager
@@ -188,6 +204,13 @@ fi
 # Set root password
 dialog --msgbox "You will now set the root password." 6 40
 arch-chroot /mnt passwd
+
+# Ask if the user wants to use bash or install zsh
+dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
+if [ $? -eq 0 ]; then
+  arch-chroot /mnt pacman -Sy --noconfirm zsh
+  arch-chroot /mnt chsh -s /bin/zsh
+fi
 
 # Install rEFInd bootloader with Btrfs support and tweaks
 dialog --infobox "Installing rEFInd bootloader..." 5 40
@@ -223,33 +246,32 @@ cat << 'EOM' > /mnt/root/first_login.sh
 
 clear
 cat << 'EOF'
-Welcome to your new Arch Linux system! Right now your Arch Linux install is just a barebones install containing only the base system, processor microcode for your CPU, the Linux kermel, and a bootloader.
+Welcome to your new Arch Linux system!
 
 To create a new user and grant sudo privileges, follow these steps:
 
-1. Install a text editor (e.g., nano, vim, or emacs) if needed:
-   pacman -Sy nano or pacman -Sy vim or pacman -Sy emacs
-
-2. Create a new user (replace 'username' with your desired username):
+1. Create a new user (replace 'username' with your desired username):
    useradd -m username
-   
-3. Set the password for the new user:
+
+2. Set the password for the new user:
    passwd username
 
-4. Install sudo (if not already installed):
+3. Install sudo (if not already installed):
    pacman -Sy sudo
 
-5. Add the user to the wheel group:
+4. Add the user to the wheel group:
    usermod -aG wheel username
 
-6. Edit the sudoers file to grant sudo privileges:
+5. Edit the sudoers file to grant sudo privileges:
    EDITOR=nano visudo
 
    Uncomment the line:
    %wheel ALL=(ALL) ALL
 
-You're all set!
+6. Install a text editor (e.g., nano, vim, or emacs) if needed:
+   pacman -Sy nano
 
+You're all set!
 EOF
 
 # Remove the script and its call from .bash_profile
@@ -264,16 +286,12 @@ chmod +x /mnt/root/first_login.sh
 echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
 
 # Finish
-dialog --msgbox "Installation complete! You can now reboot into your new system.\n\nWhen you log in as root for the first time, you will receive instructions on how to create a normal user and grant sudo privileges." 10 70
-
-# Unmount partitions
-umount -R /mnt
-
-# Offer to reboot
-dialog --yesno "Would you like to reboot now?" 6 40
+dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 10 70
 if [ $? -eq 0 ]; then
+  # Reboot the system
+  umount -R /mnt
   reboot
 else
+  # Drop to the terminal
   clear
-  exit 0
 fi
