@@ -105,45 +105,44 @@ mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $r
 # Mount EFI partition
 mount $esp /mnt/boot/efi
 
-# Install base system
-dialog --infobox "Installing base system..." 5 40
-pacstrap /mnt base linux linux-firmware btrfs-progs
-
-# Generate fstab
-genfstab -U /mnt >> /mnt/etc/fstab
-
 # Detect CPU and offer to install microcode
 cpu_vendor=$(lscpu | awk -F: '/Vendor ID/{gsub(/^[ \t]+/, "", $2); print $2}')
 microcode_pkg=""
 microcode_img=""
 if [[ "$cpu_vendor" == "GenuineIntel" ]]; then
-  microcode_pkg="intel-ucode"
-  microcode_img="intel-ucode.img"
-elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
-  microcode_pkg="amd-ucode"
-  microcode_img="amd-ucode.img"
-fi
-
-if [ -n "$microcode_pkg" ]; then
-  dialog --yesno "CPU detected: $cpu_vendor\nWould you like to install $microcode_pkg?" 7 60
+  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
   if [ $? -eq 0 ]; then
-    arch-chroot /mnt pacman -Sy --noconfirm $microcode_pkg
-  else
-    microcode_img=""
+    microcode_pkg="intel-ucode"
+    microcode_img="intel-ucode.img"
+  fi
+elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
+  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
+  if [ $? -eq 0 ]; then
+    microcode_pkg="amd-ucode"
+    microcode_img="amd-ucode.img"
   fi
 fi
+
+# Offer to install btrfs-progs
+dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
+if [ $? -eq 0 ]; then
+  btrfs_pkg="btrfs-progs"
+else
+  btrfs_pkg=""
+fi
+
+# Install base system
+dialog --infobox "Installing base system..." 5 40
+pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg
+
+# Generate fstab
+genfstab -U /mnt >> /mnt/etc/fstab
 
 # Offer to install NetworkManager
 dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
 if [ $? -eq 0 ]; then
   arch-chroot /mnt pacman -Sy --noconfirm networkmanager
   arch-chroot /mnt systemctl enable NetworkManager
-fi
-
-# Offer to install btrfs-progs (already installed, but offer for confirmation)
-dialog --yesno "Would you like to reinstall btrfs-progs for Btrfs management? (Already installed)" 7 60
-if [ $? -eq 0 ]; then
-  arch-chroot /mnt pacman -Sy --noconfirm btrfs-progs
 fi
 
 # Offer to install a text editor
