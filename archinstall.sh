@@ -1,45 +1,46 @@
 #!/bin/bash
 
+# Install dialog if not present
+if ! command -v dialog &> /dev/null; then
+    pacman -Sy --noconfirm dialog
+fi
+
 # Enable NTP synchronization
 timedatectl set-ntp true
 
-echo "Welcome to the Arch Linux Automated Installer."
+dialog --title "Arch Linux Automated Installer" --msgbox "Welcome to the Arch Linux Automated Installer." 10 60
 
-# List available disks
-echo "Available disks:"
-lsblk -d -e 7,11 -o NAME,SIZE,TYPE
+# Disk Selection
+disks_list=$(lsblk -d -e 7,11 -o NAME,SIZE -n | awk '{print "/dev/"$1" "$2" OFF"}')
+IFS=$'\n' read -d '' -r -a disks_array <<< "$disks_list"
+DISK=$(dialog --stdout --title "Select Disk" --radiolist "Choose the disk to install Arch Linux:" 15 60 4 "${disks_array[@]}")
 
-# Ask the user to choose the disk to install Arch Linux
-read -p "Enter the disk to install Arch Linux (e.g., /dev/sda): " DISK
+if [ -z "$DISK" ]; then
+    dialog --msgbox "No disk selected. Installation cancelled." 7 50
+    clear
+    exit 1
+fi
 
 # Confirm with the user
-read -p "All data on $DISK will be erased. Are you sure? [y/N]: " CONFIRM
-
-if [[ $CONFIRM != "y" && $CONFIRM != "Y" ]]; then
-    echo "Installation cancelled."
+dialog --yesno "All data on $DISK will be erased. Are you sure?" 7 50
+if [ $? -ne 0 ]; then
+    dialog --msgbox "Installation cancelled." 5 30
+    clear
     exit 1
 fi
 
 # Recommend BTRFS partition layout
-echo -e "\nRecommended BTRFS partition layout:"
-echo "- EFI System Partition (ESP): /mnt/efi"
-echo "- BTRFS subvolumes:"
-echo "  - @ mounted at /mnt"
-echo "  - @home mounted at /mnt/home"
-echo "  - @pkg mounted at /mnt/var/cache/pacman/pkg"
-echo "  - @log mounted at /mnt/var/log"
-echo "  - @snapshots mounted at /mnt/.snapshots"
+dialog --title "Partition Layout" --msgbox "Recommended BTRFS partition layout:\n\n- EFI System Partition (ESP): /mnt/efi\n- BTRFS subvolumes:\n  - @ mounted at /\n  - @home mounted at /home\n  - @pkg mounted at /var/cache/pacman/pkg\n  - @log mounted at /var/log\n  - @snapshots mounted at /.snapshots" 15 70
 
-read -p "Do you want to use the recommended BTRFS layout? [Y/n]: " USE_BTRFS
-
-if [[ $USE_BTRFS == "n" || $USE_BTRFS == "N" ]]; then
-    echo "Custom partitioning is not implemented in this script."
-    echo "Please partition your disk manually and rerun the script."
+dialog --yesno "Do you want to use the recommended BTRFS layout?" 7 50
+if [ $? -ne 0 ]; then
+    dialog --msgbox "Custom partitioning is not implemented in this script.\nPlease partition your disk manually and rerun the script." 8 60
+    clear
     exit 1
 fi
 
 # Partition the disk
-echo "Partitioning the disk..."
+dialog --infobox "Partitioning the disk..." 5 40
 
 # Wipe the disk
 sgdisk --zap-all $DISK
@@ -63,7 +64,7 @@ else
 fi
 
 # Format the partitions
-echo "Formatting the partitions..."
+dialog --infobox "Formatting the partitions..." 5 40
 
 mkfs.vfat -F32 $ESP
 mkfs.btrfs -f -L "Arch" $ROOT_PART
@@ -96,7 +97,7 @@ mkdir -p /mnt/efi
 mount $ESP /mnt/efi
 
 # CPU Microcode
-echo "Detecting CPU type..."
+dialog --infobox "Detecting CPU type..." 5 40
 CPU_VENDOR=$(lscpu | grep 'Vendor ID' | awk '{print $3}')
 
 if [[ $CPU_VENDOR == "GenuineIntel" ]]; then
@@ -106,25 +107,28 @@ elif [[ $CPU_VENDOR == "AuthenticAMD" ]]; then
     MICROCODE="amd-ucode"
     MICROCODE_IMG="amd-ucode.img"
 else
-    read -p "Unable to detect CPU microcode. Do you have an Intel or AMD CPU? [intel/amd]: " CPU_CHOICE
-    if [[ $CPU_CHOICE == "intel" ]]; then
+    CPU_CHOICE=$(dialog --stdout --title "CPU Microcode" --menu "Unable to detect CPU microcode. Do you have an Intel or AMD CPU?" 10 50 2 \
+    "intel" "Intel CPU" \
+    "amd" "AMD CPU")
+
+    if [ "$CPU_CHOICE" == "intel" ]; then
         MICROCODE="intel-ucode"
         MICROCODE_IMG="intel-ucode.img"
-    elif [[ $CPU_CHOICE == "amd" ]]; then
+    elif [ "$CPU_CHOICE" == "amd" ]; then
         MICROCODE="amd-ucode"
         MICROCODE_IMG="amd-ucode.img"
     else
-        echo "Invalid choice. Defaulting to no microcode."
+        dialog --msgbox "Invalid choice. Defaulting to no microcode." 5 50
         MICROCODE=""
         MICROCODE_IMG=""
     fi
 fi
 
-echo "Microcode selected: $MICROCODE"
+dialog --msgbox "Microcode selected: $MICROCODE" 5 50
 
 # Ask if the user wants to perform a minimal install
-read -p "Do you want to perform a minimal install? [y/N]: " MINIMAL_INSTALL_CHOICE
-if [[ $MINIMAL_INSTALL_CHOICE == "y" || $MINIMAL_INSTALL_CHOICE == "Y" ]]; then
+dialog --yesno "Do you want to perform a minimal install?" 7 50
+if [ $? -eq 0 ]; then
     MINIMAL_INSTALL="yes"
 else
     MINIMAL_INSTALL="no"
@@ -132,70 +136,55 @@ fi
 
 if [[ "$MINIMAL_INSTALL" == "no" ]]; then
     # Text editor choice
-    echo "Select a text editor to install:"
-    select EDITOR_CHOICE in vi vim nano; do
-        case $EDITOR_CHOICE in
-            vi|vim|nano)
-                break
-                ;;
-            *)
-                echo "Invalid selection."
-                ;;
-        esac
-    done
+    EDITOR_CHOICE=$(dialog --stdout --title "Select Text Editor" --menu "Choose a text editor to install:" 10 50 3 \
+    "vi" "vi editor" \
+    "vim" "Vim editor" \
+    "nano" "Nano editor")
+
+    if [ -z "$EDITOR_CHOICE" ]; then
+        dialog --msgbox "No editor selected. Installation cancelled." 7 50
+        clear
+        exit 1
+    fi
 
     # NetworkManager installation
-    read -p "Would you like to install NetworkManager to manage network connections? [Y/n]: " INSTALL_NM
-
-    if [[ $INSTALL_NM == "n" || $INSTALL_NM == "N" ]]; then
-        NETWORK_PACKAGES=""
-        ENABLE_NM="no"
-    else
+    dialog --yesno "Would you like to install NetworkManager to manage network connections?" 7 60
+    if [ $? -eq 0 ]; then
         NETWORK_PACKAGES="networkmanager"
         ENABLE_NM="yes"
+    else
+        NETWORK_PACKAGES=""
+        ENABLE_NM="no"
     fi
 
     # Ask for additional packages
-    read -p "Enter any additional packages to install during pacstrap (separated by spaces), or press Enter to skip: " ADDITIONAL_PACKAGES
+    ADDITIONAL_PACKAGES=$(dialog --stdout --inputbox "Enter any additional packages to install during pacstrap (separated by spaces), or leave blank to skip:" 10 60)
 
     # Ask the user if they want to install a GUI
-    echo "Would you like to install a GUI/Desktop Environment?"
-    select GUI_CHOICE in "GNOME" "KDE Plasma" "XFCE" "None"; do
-        case $GUI_CHOICE in
-            "GNOME"|"KDE Plasma")
-                GUI_DE="$GUI_CHOICE"
-                break
-                ;;
-            "XFCE")
-                GUI_DE="XFCE"
-                break
-                ;;
-            "None")
-                GUI_DE="None"
-                break
-                ;;
-            *)
-                echo "Invalid selection."
-                ;;
-        esac
-    done
+    GUI_CHOICE=$(dialog --stdout --title "GUI/Desktop Environment" --menu "Would you like to install a GUI/Desktop Environment?" 15 60 4 \
+    "GNOME" "GNOME Desktop Environment" \
+    "KDE Plasma" "KDE Plasma Desktop Environment" \
+    "XFCE" "XFCE Desktop Environment" \
+    "None" "No GUI/Desktop Environment")
 
-    if [[ "$GUI_DE" != "None" ]]; then
+    if [ -z "$GUI_CHOICE" ]; then
+        dialog --msgbox "No GUI selected. Installation cancelled." 7 50
+        clear
+        exit 1
+    fi
+
+    if [[ "$GUI_CHOICE" != "None" ]]; then
         # Prompt for Wayland or X11
-        echo "Do you want to use Wayland or X11?"
-        select DISPLAY_SERVER in "Wayland" "X11"; do
-            case $DISPLAY_SERVER in
-                "Wayland")
-                    break
-                    ;;
-                "X11")
-                    break
-                    ;;
-                *)
-                    echo "Invalid selection."
-                    ;;
-            esac
-        done
+        DISPLAY_SERVER=$(dialog --stdout --title "Display Server" --menu "Do you want to use Wayland or X11?" 10 40 2 \
+        "Wayland" "Use Wayland" \
+        "X11" "Use X11")
+
+        if [ -z "$DISPLAY_SERVER" ]; then
+            dialog --msgbox "No display server selected. Installation cancelled." 7 50
+            clear
+            exit 1
+        fi
+
         ENABLE_GUI="yes"
     else
         ENABLE_GUI="no"
@@ -204,7 +193,7 @@ if [[ "$MINIMAL_INSTALL" == "no" ]]; then
 
     # Determine GUI packages based on choices
     if [[ "$ENABLE_GUI" == "yes" ]]; then
-        case $GUI_DE in
+        case $GUI_CHOICE in
             "GNOME")
                 if [[ "$DISPLAY_SERVER" == "X11" ]]; then
                     GUI_PACKAGES="xorg-server gnome gnome-tweaks"
@@ -230,50 +219,45 @@ if [[ "$MINIMAL_INSTALL" == "no" ]]; then
         esac
 
         # Ask if they would like to install a video driver
-        echo "Would you like to install a video driver?"
-        select VIDEO_DRIVER_CHOICE in "Nvidia" "AMD" "Intel" "VirtualBox" "None"; do
-            case $VIDEO_DRIVER_CHOICE in
-                "Nvidia")
-                    # Ask for Nvidia driver type
-                    echo "Select Nvidia driver type:"
-                    select NVIDIA_DRIVER_TYPE in "nvidia" "nvidia-open"; do
-                        case $NVIDIA_DRIVER_TYPE in
-                            "nvidia")
-                                VIDEO_DRIVER="nvidia nvidia-utils"
-                                break
-                                ;;
-                            "nvidia-open")
-                                VIDEO_DRIVER="nvidia-open nvidia-utils"
-                                break
-                                ;;
-                            *)
-                                echo "Invalid selection."
-                                ;;
-                        esac
-                    done
-                    break
-                    ;;
-                "AMD")
-                    VIDEO_DRIVER="xf86-video-amdgpu"
-                    break
-                    ;;
-                "Intel")
-                    VIDEO_DRIVER="xf86-video-intel"
-                    break
-                    ;;
-                "VirtualBox")
-                    VIDEO_DRIVER="virtualbox-guest-utils"
-                    break
-                    ;;
-                "None")
-                    VIDEO_DRIVER=""
-                    break
-                    ;;
-                *)
-                    echo "Invalid selection."
-                    ;;
-            esac
-        done
+        VIDEO_DRIVER_CHOICE=$(dialog --stdout --title "Video Driver" --menu "Would you like to install a video driver?" 15 60 5 \
+        "Nvidia" "Nvidia drivers" \
+        "AMD" "AMD drivers" \
+        "Intel" "Intel drivers" \
+        "VirtualBox" "VirtualBox guest drivers" \
+        "None" "No video driver")
+
+        if [ -z "$VIDEO_DRIVER_CHOICE" ]; then
+            dialog --msgbox "No video driver selected. Installation cancelled." 7 50
+            clear
+            exit 1
+        fi
+
+        # Handle Nvidia selection
+        if [[ "$VIDEO_DRIVER_CHOICE" == "Nvidia" ]]; then
+            NVIDIA_DRIVER_TYPE=$(dialog --stdout --title "Nvidia Driver Type" --menu "Select Nvidia driver type:" 10 50 2 \
+            "nvidia" "Proprietary Nvidia driver" \
+            "nvidia-open" "Open-source Nvidia driver")
+
+            if [ -z "$NVIDIA_DRIVER_TYPE" ]; then
+                dialog --msgbox "No Nvidia driver type selected. Installation cancelled." 7 50
+                clear
+                exit 1
+            fi
+
+            if [[ "$NVIDIA_DRIVER_TYPE" == "nvidia" ]]; then
+                VIDEO_DRIVER="nvidia nvidia-utils"
+            else
+                VIDEO_DRIVER="nvidia-open nvidia-utils"
+            fi
+        elif [[ "$VIDEO_DRIVER_CHOICE" == "AMD" ]]; then
+            VIDEO_DRIVER="xf86-video-amdgpu"
+        elif [[ "$VIDEO_DRIVER_CHOICE" == "Intel" ]]; then
+            VIDEO_DRIVER="xf86-video-intel"
+        elif [[ "$VIDEO_DRIVER_CHOICE" == "VirtualBox" ]]; then
+            VIDEO_DRIVER="virtualbox-guest-utils"
+        else
+            VIDEO_DRIVER=""
+        fi
 
         # Initialize VIDEO_PACKAGES
         VIDEO_PACKAGES=""
@@ -294,29 +278,63 @@ if [[ "$MINIMAL_INSTALL" == "no" ]]; then
             fi
         fi
     fi
+else
+    EDITOR_CHOICE=""
+    NETWORK_PACKAGES=""
+    GUI_PACKAGES=""
+    VIDEO_PACKAGES=""
+    ADDITIONAL_PACKAGES=""
 fi
 
 # Ask the user for a hostname
-read -p "Enter a hostname for your system: " HOSTNAME
+HOSTNAME=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
+
+if [ -z "$HOSTNAME" ]; then
+    dialog --msgbox "No hostname entered. Installation cancelled." 7 50
+    clear
+    exit 1
+fi
 
 # Ask the user for their timezone
-echo "Available time zones can be found under /usr/share/zoneinfo."
-read -p "Enter your timezone (e.g., 'Region/City', such as 'America/New_York'): " TIMEZONE
+TIMEZONE=$(dialog --stdout --inputbox "Enter your timezone (e.g., 'Region/City', such as 'America/New_York'):" 8 60)
+
+if [ -z "$TIMEZONE" ]; then
+    dialog --msgbox "No timezone entered. Installation cancelled." 7 50
+    clear
+    exit 1
+fi
 
 # Ask the user if they'd like to enable the multilib repository
-read -p "Would you like to enable the multilib repository? [y/N]: " ENABLE_MULTILIB_CHOICE
-if [[ $ENABLE_MULTILIB_CHOICE == "y" || $ENABLE_MULTILIB_CHOICE == "Y" ]]; then
+dialog --yesno "Would you like to enable the multilib repository?" 7 50
+if [ $? -eq 0 ]; then
     ENABLE_MULTILIB="yes"
 else
     ENABLE_MULTILIB="no"
 fi
 
-# Pacstrap the base system
-echo "Installing base system..."
-if [[ "$MINIMAL_INSTALL" == "yes" ]]; then
-    pacstrap /mnt base linux linux-firmware $MICROCODE
+# Ask the user if they'd like to use zram for swap
+dialog --yesno "Would you like to use zram for swap instead of a traditional swap partition?" 7 70
+if [ $? -eq 0 ]; then
+    USE_ZRAM="yes"
 else
-    pacstrap /mnt base linux linux-firmware $MICROCODE $EDITOR_CHOICE $NETWORK_PACKAGES $GUI_PACKAGES $VIDEO_PACKAGES $ADDITIONAL_PACKAGES
+    USE_ZRAM="no"
+fi
+
+if [[ "$USE_ZRAM" == "yes" ]]; then
+    ZRAM_PACKAGES="zram-generator"
+else
+    ZRAM_PACKAGES=""
+fi
+
+# Get PARTUUID before chrooting
+PARTUUID=$(blkid -s PARTUUID -o value $ROOT_PART)
+
+# Pacstrap the base system
+dialog --infobox "Installing base system..." 5 40
+if [[ "$MINIMAL_INSTALL" == "yes" ]]; then
+    pacstrap /mnt base linux linux-firmware $MICROCODE $ZRAM_PACKAGES
+else
+    pacstrap /mnt base linux linux-firmware $MICROCODE $EDITOR_CHOICE $NETWORK_PACKAGES $GUI_PACKAGES $VIDEO_PACKAGES $ADDITIONAL_PACKAGES $ZRAM_PACKAGES
 fi
 
 # Generate fstab
@@ -346,22 +364,23 @@ if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
     pacman -Sy
 fi
 
-# Set root password
-echo "Setting root password:"
-passwd root
-
 # Install bootloader
 echo "Installing rEFInd bootloader..."
 pacman -S --noconfirm refind
 
 refind-install
 
-# Configure /boot/refind_linux.conf
-PARTUUID=\$(blkid -s PARTUUID -o value $ROOT_PART)
-echo '"Boot with standard options"    "root=PARTUUID=\$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img"' > /boot/refind_linux.conf
-
 # Update refind.conf
 sed -i 's/^#extra_kernel_version_strings.*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /efi/EFI/refind/refind.conf
+
+# Enable mouse in rEFInd
+sed -i 's/^#enable_mouse/enable_mouse/' /efi/EFI/refind/refind.conf
+
+# Set mouse speed to 8
+sed -i 's/^#mouse_speed.*/mouse_speed 8/' /efi/EFI/refind/refind.conf
+
+# Set resolution to max
+sed -i 's/^#resolution max/resolution max/' /efi/EFI/refind/refind.conf
 
 # Enable NetworkManager if installed
 if [[ "$MINIMAL_INSTALL" == "no" && "$ENABLE_NM" == "yes" ]]; then
@@ -380,9 +399,33 @@ if [[ "$VIDEO_DRIVER" == "virtualbox-guest-utils" ]]; then
     systemctl enable vboxservice
 fi
 
+# Configure zram if selected
+if [[ "$USE_ZRAM" == "yes" ]]; then
+    echo "Configuring zram swap..."
+    cat <<EOLZRAM > /etc/systemd/zram-generator.conf
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+EOLZRAM
+fi
+
 EOF
+
+# Set root password outside the chroot to ensure interactive prompt
+dialog --title "Root Password" --msgbox "Please set the root password." 7 40
+arch-chroot /mnt passwd root
+
+# Configure /boot/refind_linux.conf with expanded variables and additional boot options
+cat <<EOL > /mnt/boot/refind_linux.conf
+"Boot with standard options"        "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img"
+"Boot with fallback initramfs"      "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v-fallback.img"
+"Boot to terminal (multi-user)"     "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img systemd.unit=multi-user.target"
+"Boot to single user mode"          "root=PARTUUID=$PARTUUID rw rootflags=subvol=@ initrd=@\\boot\\$MICROCODE_IMG initrd=@\\boot\\initramfs-%v.img single"
+EOL
 
 # Unmount partitions
 umount -R /mnt
 
-echo "Installation complete. You can reboot now."
+dialog --title "Installation Complete" --msgbox "Installation complete. You can reboot now." 7 50
+
+clear
