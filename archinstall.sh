@@ -75,11 +75,13 @@ fi
 # Create partitions
 echo "[DEBUG] Creating partitions on $disk"
 # Partition 1: EFI System Partition
+sleep 2
 sgdisk -n 1:0:+300M -t 1:ef00 $disk
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
   exit 1
 fi
+partprobe $disk
 # Partition 2: Root partition
 sgdisk -n 2:0:0 -t 2:8300 $disk
 if [ $? -ne 0 ]; then
@@ -100,7 +102,7 @@ fi
 # Format partitions
 echo "[DEBUG] Formatting partitions"
 dialog --infobox "Formatting partitions..." 5 40
-mkfs.vfat -F32 $esp
+mkfs.vfat -F32 -I $esp
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to format EFI partition. Exiting." 5 40
   exit 1
