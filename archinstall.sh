@@ -15,6 +15,13 @@ if ! command -v dialog &> /dev/null; then
   pacman -Sy --noconfirm dialog
 fi
 
+# Display script version
+dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
+
+This version includes bug fixes and improvements for a more stable installation experience." 10 70
+  pacman -Sy --noconfirm dialog
+fi
+
 # Clear the screen
 clear
 
