@@ -152,8 +152,10 @@ mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log $root_pa
 mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $root_partition /mnt/.snapshots
 
 # Mount EFI partition
-mkdir -p /mnt/boot/efi
-mount $esp /mnt/boot/efi
+if ! mount | grep -q '/mnt/boot/efi'; then
+  mkdir -p /mnt/boot/efi
+  mount $esp /mnt/boot/efi
+fi
 
 # Detect CPU and offer to install microcode
 cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
@@ -286,7 +288,7 @@ fi
 # Install NetworkManager if selected
 if [ -n "$networkmanager_pkg" ]; then
   pacman -Sy --noconfirm $networkmanager_pkg
-  systemctl enable NetworkManager
+  systemctl enable NetworkManager --root=/mnt
 fi
 EOF
 
@@ -382,5 +384,6 @@ if [ $? -eq 0 ]; then
   reboot
 else
   # Drop to the terminal
+  arch-chroot /mnt
   clear
 fi
