@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
+# Version: v1.0.1 - Updated for bug fixes and improvements
 # WARNING: This script will erase the selected disk or shrink an existing Windows partition.
 
 # Ensure the script is run as root
@@ -35,6 +36,11 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
+
+dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
+
+This version includes bug fixes and improvements for a more stable installation experience." 10 70
+
 dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
 
 # Ask if the user wants to use the default Btrfs subvolume scheme
