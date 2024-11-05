@@ -224,8 +224,6 @@ pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $net
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-genfstab -U /mnt >> /mnt/etc/fstab
-
 # Chroot into the new system
 arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
@@ -243,9 +241,15 @@ cat <<EOL > /etc/hosts
 EOL
 
 # Generate locales
-echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED)
+selected_locale=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $(echo "$available_locales" | nl -w2 -s" "))
+if [ -z "$selected_locale" ]; then
+  dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
+  selected_locale="en_US.UTF-8"
+fi
+echo "$selected_locale UTF-8" > /etc/locale.gen
 locale-gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "LANG=$selected_locale" > /etc/locale.conf
 
 # Configure ZRAM if enabled
 if [ -n "$zram_pkg" ]; then
