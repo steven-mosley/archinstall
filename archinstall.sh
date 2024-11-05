@@ -35,7 +35,7 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
-dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
+dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal.\n\nThis is version 2.0." 12 70
 
 # Disk selection
 echo "[DEBUG] Prompting for disk selection"
