@@ -46,82 +46,26 @@ if [ -z "$disk" ]; then
   exit 1
 fi
 
-# Detect existing Windows partitions
-echo "[DEBUG] Detecting existing Windows partitions on $disk"
-disk_partitions=$(lsblk -o NAME,FSTYPE,LABEL,UUID,MOUNTPOINTS $disk | grep -E 'ntfs|FAT32')
-free_space=$(lsblk -b -o NAME,TYPE,FREE $disk | grep "disk" | awk '{print $3}')
-min_required_space=$((30 * 1024 * 1024 * 1024)) # Minimum required space is 30GB
-
-if [ -n "$disk_partitions" ]; then
-  if [ "$free_space" -ge "$min_required_space" ]; then
-    dialog --yesno "Sufficient unallocated space detected on $disk. Would you like to proceed with using this disk for installation?" 7 60
-    if [ $? -ne 0 ]; then
-      dialog --msgbox "You can select another disk for installation." 6 50
-      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
-      if [ -z "$disk" ]; then
-        dialog --msgbox "No disk selected. Exiting." 5 40
-        clear
-        exit 1
-      fi
-    fi
+# Detect existing Windows partitions or other partitions
+existing_partitions=$(lsblk -o NAME,TYPE $disk | grep part)
+if [ -n "$existing_partitions" ]; then
+  dialog --yesno "Existing partitions detected on $disk. Would you like to destroy the current partitions and recreate them?" 7 60
+  if [ $? -eq 0 ]; then
+    echo "[DEBUG] Destroying existing partitions on $disk"
+    sgdisk --zap-all $disk
   else
-    dialog --msgbox "Windows partitions detected on $disk. You can choose to install Arch Linux alongside Windows." 10 60
-    # Ask user if they want to proceed with dual boot
-    dialog --yesno "Would you like to install Arch Linux alongside Windows by shrinking an existing partition?" 7 50
-    if [ $? -ne 0 ]; then
-      dialog --msgbox "You can select another disk for installation." 6 50
-      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
-      if [ -z "$disk" ]; then
-        dialog --msgbox "No disk selected. Exiting." 5 40
-        clear
-        exit 1
-      fi
-    else
-      # Prompt user to select the Windows partition
-      echo "[DEBUG] Prompting for Windows partition to resize"
-      windows_partition=$(dialog --stdout --title "Select Windows Partition" --menu "Select the main Windows partition to resize:" 15 60 4 $(lsblk -rn -o NAME,SIZE,FSTYPE $disk | grep ntfs | awk '{print $1 " " $2}'))
-      if [ -z "$windows_partition" ]; then
-        dialog --msgbox "No Windows partition selected. Exiting." 5 40
-        clear
-        exit 1
-      fi
-      windows_partition="${disk}${windows_partition}"
-      # Ask user how much space to allocate for Arch Linux
-      echo "[DEBUG] Prompting for space allocation for Arch Linux"
-      arch_space=$(dialog --stdout --inputbox "Enter the amount of space (in GB) you want to allocate for Arch Linux:" 8 40)
-      if [ -z "$arch_space" ]; then
-        dialog --msgbox "No space entered. Exiting." 5 40
-        clear
-        exit 1
-      fi
-      # Shrink Windows partition
-      echo "[DEBUG] Shrinking Windows partition $windows_partition by $arch_space GB"
-      dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
-      parted $disk resizepart ${windows_partition##*p} -${arch_space}G
-    fi
+    dialog --msgbox "Installation canceled. Exiting." 5 40
+    clear
+    exit 1
   fi
-else
-  dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 7 50
-  if [ $? -ne 0 ]; then
-    dialog --msgbox "You can select another disk for installation." 6 50
-    disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
-    if [ -z "$disk" ]; then
-      dialog --msgbox "No disk selected. Exiting." 5 40
-      clear
-      exit 1
-    fi
-  fi
-  # Wipe the disk
-  echo "[DEBUG] Wiping the disk $disk"
-  sgdisk --zap-all $disk
-
-  # Create partitions
-  echo "[DEBUG] Creating partitions on $disk"
-  # Partition 1: EFI System Partition
-  sgdisk -n 1:0:+550M -t 1:ef00 $disk
-  # Partition 2: Root partition
-  sgdisk -n 2:0:0 -t 2:8300 $disk
 fi
+
+# Create partitions
+echo "[DEBUG] Creating partitions on $disk"
+# Partition 1: EFI System Partition
+sgdisk -n 1:0:+550M -t 1:ef00 $disk
+# Partition 2: Root partition
+sgdisk -n 2:0:0 -t 2:8300 $disk
 
 # Get partition names
 echo "[DEBUG] Determining partition names"
@@ -298,8 +242,7 @@ if [ -z "$root_password" ]; then
   clear
   exit 1
 fi
-arch-chroot /mnt /bin/bash -c "echo -e '$root_password
-$root_password' | passwd"
+arch-chroot /mnt /bin/bash -c "echo -e '$root_password\n$root_password' | passwd"
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
@@ -334,6 +277,8 @@ fi
 
 cat << EOF > /mnt/boot/refind_linux.conf
 "Boot with standard options"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line"
+"Boot using fallback initramfs"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\\boot\\initramfs-%v-fallback.img"
+"Boot to terminal"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\\boot\\initramfs-%v.img systemd.unit=multi-user.target"
 EOF
 
 # Copy refind_linux.conf to rEFInd directory
@@ -387,9 +332,7 @@ chmod +x /mnt/root/first_login.sh
 echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
 
 # Finish installation
-dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?
-
-Select 'No' to drop to the terminal." 10 70
+dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 10 70
 if [ $? -eq 0 ]; then
   # Reboot the system
   umount -R /mnt
