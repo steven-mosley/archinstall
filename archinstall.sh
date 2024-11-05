@@ -199,6 +199,14 @@ else
   btrfs_pkg=""
 fi
 
+# Offer to install NetworkManager
+dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
+if [ $? -eq 0 ]; then
+  networkmanager_pkg="networkmanager"
+else
+  networkmanager_pkg=""
+fi
+
 # Offer to enable ZRAM
 dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
 if [ $? -eq 0 ]; then
@@ -246,11 +254,6 @@ compression-algorithm = zstd
 EOM
 fi
 
-# Install NetworkManager if selected
-if [ -n "$networkmanager_pkg" ]; then
-  pacman -Sy --noconfirm $networkmanager_pkg
-  systemctl enable NetworkManager
-fi
 EOF
 # Set the timezone
 ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
