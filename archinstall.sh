@@ -35,7 +35,15 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
-dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal.\n\nThis is version 2.0." 12 70
+dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
+
+# Ask if the user wants to use the default Btrfs subvolume scheme
+dialog --yesno "The default Btrfs subvolume scheme is as follows:\n\n@ mounted at /mnt\n@home mounted at /mnt/home\n@pkg mounted at /mnt/var/cache/pacman/pkg\n@log mounted at /mnt/var/log\n@snapshots mounted at /mnt/.snapshots\n\nWould you like to use this scheme?" 15 70
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Installation canceled. Exiting." 5 40
+  clear
+  exit 1
+fi
 
 # Disk selection
 echo "[DEBUG] Prompting for disk selection"
@@ -237,8 +245,14 @@ EOF
 # Set root password
 echo "[DEBUG] Prompting for root password"
 root_password=$(dialog --stdout --insecure --passwordbox "Enter root password:" 8 40)
-if [ -z "$root_password" ]; then
+confirm_password=$(dialog --stdout --insecure --passwordbox "Confirm root password:" 8 40)
+if [ -z "$root_password" ] || [ -z "$confirm_password" ]; then
   dialog --msgbox "No password entered. Exiting." 5 40
+  clear
+  exit 1
+fi
+if [ "$root_password" != "$confirm_password" ]; then
+  dialog --msgbox "Passwords do not match. Exiting." 5 40
   clear
   exit 1
 fi
@@ -339,6 +353,7 @@ if [ $? -eq 0 ]; then
   reboot
 else
   # Drop to the terminal
-  arch-chroot /mnt
   clear
+  echo "[DEBUG] Dropping to chroot environment for additional configuration"
+  arch-chroot /mnt /bin/bash
 fi
