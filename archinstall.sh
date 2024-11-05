@@ -6,7 +6,7 @@
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root."
-  exit
+  exit 1
 fi
 
 # Install dialog if not already installed
@@ -47,7 +47,7 @@ fi
 
 # Disk selection
 echo "[DEBUG] Prompting for disk selection"
-disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE,TYPE | awk '$3=="disk" {print "/dev/" $1 " " $2}'))
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
   clear
@@ -61,6 +61,10 @@ if [ -n "$existing_partitions" ]; then
   if [ $? -eq 0 ]; then
     echo "[DEBUG] Destroying existing partitions on $disk"
     sgdisk --zap-all $disk
+    if [ $? -ne 0 ]; then
+      dialog --msgbox "Failed to destroy partitions on $disk. Exiting." 5 40
+      exit 1
+    fi
   else
     dialog --msgbox "Installation canceled. Exiting." 5 40
     clear
@@ -71,9 +75,17 @@ fi
 # Create partitions
 echo "[DEBUG] Creating partitions on $disk"
 # Partition 1: EFI System Partition
-sgdisk -n 1:0:+550M -t 1:ef00 $disk
+sgdisk -n 1:0:+300M -t 1:ef00 $disk
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
+  exit 1
+fi
 # Partition 2: Root partition
 sgdisk -n 2:0:0 -t 2:8300 $disk
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
+  exit 1
+fi
 
 # Get partition names
 echo "[DEBUG] Determining partition names"
@@ -89,15 +101,31 @@ fi
 echo "[DEBUG] Formatting partitions"
 dialog --infobox "Formatting partitions..." 5 40
 mkfs.vfat -F32 $esp
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to format EFI partition. Exiting." 5 40
+  exit 1
+fi
 mkfs.btrfs -f -L Arch $root_partition
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to format root partition. Exiting." 5 40
+  exit 1
+fi
 
 # Mount root partition
 echo "[DEBUG] Mounting root partition $root_partition"
 mount $root_partition /mnt
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to mount root partition. Exiting." 5 40
+  exit 1
+fi
 
 # Create Btrfs subvolumes
 echo "[DEBUG] Creating Btrfs subvolumes"
 btrfs su cr /mnt/@
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to create @ subvolume. Exiting." 5 40
+  exit 1
+fi
 btrfs su cr /mnt/@home
 btrfs su cr /mnt/@pkg
 btrfs su cr /mnt/@log
@@ -108,19 +136,25 @@ echo "[DEBUG] Unmounting root partition"
 umount /mnt
 
 # Mount subvolumes with options
+mount_options="noatime,compress=zstd,discard=async,space_cache=v2"
 echo "[DEBUG] Mounting Btrfs subvolumes"
-mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@ $root_partition /mnt
+mount -o $mount_options,subvol=@ $root_partition /mnt
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
+  exit 1
+fi
 mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@home $root_partition /mnt/home
-mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
-mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log $root_partition /mnt/var/log
-mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $root_partition /mnt/.snapshots
+mount -o $mount_options,subvol=@home $root_partition /mnt/home
+mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
+mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
+mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
 
 # Mount EFI partition
 echo "[DEBUG] Mounting EFI partition $esp"
-if ! mount | grep -q '/mnt/boot/efi'; then
-  mkdir -p /mnt/boot/efi
-  mount $esp /mnt/boot/efi
+mount $esp /mnt/boot/efi
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
+  exit 1
 fi
 
 # Detect CPU and offer to install microcode
@@ -193,10 +227,18 @@ fi
 echo "[DEBUG] Installing base system"
 dialog --infobox "Installing base system..." 5 40
 pacstrap /mnt base linux linux-firmware $microcode_pkg "$btrfs_pkg" "$zram_pkg" "$networkmanager_pkg"
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to install base system. Exiting." 5 40
+  exit 1
+fi
 
 # Generate fstab
 echo "[DEBUG] Generating fstab"
 genfstab -U /mnt >> /mnt/etc/fstab
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to generate fstab. Exiting." 5 40
+  exit 1
+fi
 
 # Chroot into the new system
 echo "[DEBUG] Entering chroot to configure the new system"
@@ -226,7 +268,7 @@ if [ -z "$selected_locale" ]; then
   dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
   selected_locale="en_US.UTF-8"
 fi
-echo "$selected_locale UTF-8" > /etc/locale.gen
+echo "$selected_locale UTF-8" >> /etc/locale.gen
 locale-gen
 echo "LANG=$selected_locale" > /etc/locale.conf
 
@@ -244,19 +286,7 @@ EOF
 
 # Set root password
 echo "[DEBUG] Prompting for root password"
-root_password=$(dialog --stdout --insecure --passwordbox "Enter root password:" 8 40)
-confirm_password=$(dialog --stdout --insecure --passwordbox "Confirm root password:" 8 40)
-if [ -z "$root_password" ] || [ -z "$confirm_password" ]; then
-  dialog --msgbox "No password entered. Exiting." 5 40
-  clear
-  exit 1
-fi
-if [ "$root_password" != "$confirm_password" ]; then
-  dialog --msgbox "Passwords do not match. Exiting." 5 40
-  clear
-  exit 1
-fi
-arch-chroot /mnt /bin/bash -c "echo -e '$root_password\n$root_password' | passwd"
+arch-chroot /mnt passwd
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
@@ -271,6 +301,10 @@ echo "[DEBUG] Installing rEFInd bootloader"
 dialog --infobox "Installing rEFInd bootloader..." 5 40
 arch-chroot /mnt pacman -Sy --noconfirm refind
 arch-chroot /mnt refind-install
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to install rEFInd. Exiting." 5 40
+  exit 1
+fi
 
 # rEFInd configuration
 echo "[DEBUG] Modifying rEFInd configuration"
