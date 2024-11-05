@@ -202,7 +202,7 @@ fi
 # Offer to enable ZRAM
 dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
 if [ $? -eq 0 ]; then
-  zram_pkg="systemd-zram-generator"
+  zram_pkg="zram-generator"
 else
   zram_pkg=""
 fi
