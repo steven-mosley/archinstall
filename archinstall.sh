@@ -152,6 +152,7 @@ mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log $root_pa
 mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $root_partition /mnt/.snapshots
 
 # Mount EFI partition
+mkdir -p /mnt/boot/efi
 mount $esp /mnt/boot/efi
 
 # Detect CPU and offer to install microcode
@@ -213,8 +214,44 @@ pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
+genfstab -U /mnt >> /mnt/etc/fstab
+
 # Chroot into the new system
 arch-chroot /mnt /bin/bash <<EOF
+# Set the timezone
+ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
+hwclock --systohc
+
+# Set the hostname
+echo "$hostname" > /etc/hostname
+
+# Configure /etc/hosts
+cat <<EOL > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $hostname.localdomain $hostname
+EOL
+
+# Generate locales
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# Configure ZRAM if enabled
+if [ -n "$zram_pkg" ]; then
+  cat <<EOM > /etc/systemd/zram-generator.conf
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+EOM
+fi
+
+# Install NetworkManager if selected
+if [ -n "$networkmanager_pkg" ]; then
+  pacman -Sy --noconfirm $networkmanager_pkg
+  systemctl enable NetworkManager
+fi
+EOF
 # Set the timezone
 ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
 hwclock --systohc
