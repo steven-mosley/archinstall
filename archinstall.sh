@@ -198,7 +198,7 @@ fi
 
 # Prompt for locale
 echo "[DEBUG] Prompting for locale selection"
-selected_locale=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | nl -w2 -s" "))
+selected_locale=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED))
 if [ -z "$selected_locale" ]; then
   dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
   selected_locale="en_US.UTF-8"
@@ -250,7 +250,7 @@ fi
 
 # Chroot into the new system
 echo "[DEBUG] Entering chroot to configure the new system"
-arch-chroot /mnt /bin/bash <<EOF
+arch-chroot /mnt <<EOF
 # Set the timezone
 echo "[DEBUG] Setting timezone to $timezone"
 ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
@@ -270,7 +270,7 @@ EOL
 
 # Generate locales
 echo "[DEBUG] Generating locales"
-echo "$selected_locale UTF-8" >> /etc/locale.gen
+echo "$selected_locale UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=$selected_locale" > /etc/locale.conf
 
