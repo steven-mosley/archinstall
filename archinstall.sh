@@ -1,436 +1,347 @@
 #!/bin/bash
 
-# Arch Linux Automated Installation Script with Enhanced Manual Partitioning
-
-set -e
-
-# Function to display an error message and exit
-error_exit() {
-    dialog --title "Error" --msgbox "$1" 8 50
-    clear
-    exit 1
-}
+# Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
+# WARNING: This script will erase the selected disk or shrink an existing Windows partition.
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
-    echo "Please run this script as root."
-    exit 1
+  echo "Please run as root."
+  exit
 fi
 
-# Check for dialog and install if missing
+# Install dialog if not already installed
 if ! command -v dialog &> /dev/null; then
-    pacman -Sy dialog --noconfirm
+  pacman -Sy --noconfirm dialog
 fi
 
-# Temporary file for dialog inputs
-TEMP=$(mktemp)
+# Clear the screen
+clear
 
-# Function to list available disks
-list_disks() {
-    lsblk -d -o NAME,SIZE,MODEL,TYPE | grep "disk" | awk '{print $1 " (" $2 " - " $3 ")"}'
-}
+# Check for UEFI mode
+if [ ! -d /sys/firmware/efi/efivars ]; then
+  dialog --msgbox "Your system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 8 60
+  clear
+  exit 1
+fi
 
-# Function to select a disk
-select_disk() {
-    DISKS=($(list_disks | awk '{print $1}'))
-    if [ ${#DISKS[@]} -eq 0 ]; then
-        error_exit "No disks found. Exiting."
-    fi
+# Check internet connection
+if ! ping -c 1 archlinux.org &> /dev/null; then
+  dialog --msgbox "Internet connection is required.\nPlease connect to the internet and rerun the installer." 7 60
+  clear
+  exit 1
+fi
 
-    DISK_OPTIONS=()
-    for DISK in "${DISKS[@]}"; do
-        SIZE=$(lsblk -d -o SIZE -n /dev/"$DISK")
-        MODEL=$(lsblk -d -o MODEL -n /dev/"$DISK" | awk '{for(i=2;i<=NF;i++) printf $i " "; print ""}')
-        DISK_OPTIONS+=("$DISK" "$SIZE - $MODEL")
-    done
+# Set time synchronization
+timedatectl set-ntp true
 
-    dialog --clear --title "Select Disk" \
-    --menu "Choose the disk to install Arch Linux on:" 20 70 10 \
-    "${DISK_OPTIONS[@]}" 2> "$TEMP"
+# Welcome message with extended information
+dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
 
+# Disk selection
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+if [ -z "$disk" ]; then
+  dialog --msgbox "No disk selected. Exiting." 5 40
+  clear
+  exit 1
+fi
+
+# Detect existing Windows partitions
+disk_partitions=$(lsblk -o NAME,FSTYPE,LABEL,UUID,MOUNTPOINTS $disk | grep -E 'ntfs|FAT32')
+free_space=$(lsblk -b -o NAME,TYPE,FREE $disk | grep "disk" | awk '{print $3}')
+min_required_space=$((30 * 1024 * 1024 * 1024)) # Minimum required space is 30GB
+
+if [ -n "$disk_partitions" ]; then
+  if [ "$free_space" -ge "$min_required_space" ]; then
+    dialog --yesno "Sufficient unallocated space detected on $disk. Would you like to proceed with using this disk for installation?" 7 60
     if [ $? -ne 0 ]; then
-        error_exit "No disk selected. Exiting."
+      dialog --msgbox "You can select another disk for installation." 6 50
+      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+      if [ -z "$disk" ]; then
+        dialog --msgbox "No disk selected. Exiting." 5 40
+        clear
+        exit 1
+      fi
     fi
-
-    SELECTED_DISK=$(cat "$TEMP")
-    DISK="/dev/$SELECTED_DISK"
-    clear
-}
-
-# Function for recommended partition scheme
-recommended_partitioning() {
-    # Create GPT label
-    parted "$DISK" --script mklabel gpt
-
-    # Create EFI partition (300MiB)
-    parted "$DISK" --script mkpart primary fat32 1MiB 301MiB
-    parted "$DISK" --script set 1 esp on
-
-    # Create Swap partition (4GiB)
-    parted "$DISK" --script mkpart primary linux-swap 301MiB 4301MiB
-
-    # Create Root partition (remaining space)
-    parted "$DISK" --script mkpart primary btrfs 4301MiB 100%
-
-    # Assign partition variables
-    EFI_PART="${DISK}1"
-    SWAP_PART="${DISK}2"
-    ROOT_PART="${DISK}3"
-
-    # Format partitions
-    mkfs.fat -F32 "$EFI_PART"
-    mkswap "$SWAP_PART"
-    swapon "$SWAP_PART"
-    mkfs.btrfs -f "$ROOT_PART"
-
-    # Mount Root partition and create subvolumes
-    mount "$ROOT_PART" /mnt
-    btrfs subvolume create /mnt/@
-    btrfs subvolume create /mnt/@home
-    btrfs subvolume create /mnt/@pkg
-    btrfs subvolume create /mnt/@log
-    btrfs subvolume create /mnt/.snapshots
-
-    # Unmount and remount with subvolumes
-    umount /mnt
-    mount -o compress=zstd,subvol=@ "$ROOT_PART" /mnt
-    mkdir -p /mnt/{home,var/cache/pacman/pkg,var/log,.snapshots}
-    mount -o compress=zstd,subvol=@home "$ROOT_PART" /mnt/home
-    mount -o compress=zstd,subvol=@pkg "$ROOT_PART" /mnt/var/cache/pacman/pkg
-    mount -o compress=zstd,subvol=@log "$ROOT_PART" /mnt/var/log
-    mount -o compress=zstd,subvol=@snapshots "$ROOT_PART" /mnt/.snapshots
-
-    clear
-}
-
-# Function for manual partitioning
-manual_partitioning() {
-    # Launch cfdisk for manual partitioning
-    dialog --msgbox "Launching cfdisk for manual partitioning.\n\nPlease create the necessary partitions.\n\nPress OK to continue." 12 60
-    clear
-    cfdisk "$DISK"
-
-    # After partitioning, list available partitions on the selected disk
-    PARTITIONS=($(lsblk -rpno NAME,TYPE | grep part | grep "^${DISK}" | awk '{print $1}'))
-
-    if [ ${#PARTITIONS[@]} -eq 0 ]; then
-        error_exit "No partitions found on $DISK. Exiting."
-    fi
-
-    # Initialize associative arrays to store mount points and filesystems
-    declare -A MOUNT_POINTS
-    declare -A FILESYSTEMS
-
-    # Define common mount points
-    COMMON_MOUNT_POINTS=("/", "/home", "/var", "/boot", "/boot/efi", "swap")
-
-    # Iterate through each partition and collect mount point and filesystem
-    for PART in "${PARTITIONS[@]}"; do
-        # Get partition size
-        SIZE=$(lsblk -o SIZE -n "$PART")
-
-        # Prompt for mount point using a menu
-        dialog --clear --title "Mount Point Selection" \
-        --menu "Select the mount point for partition $PART ($SIZE):" 15 60 7 \
-        1 "/" \
-        2 "/home" \
-        3 "/var" \
-        4 "/boot" \
-        5 "/boot/efi" \
-        6 "swap" \
-        7 "Custom" 2> "$TEMP"
-
-        MP_CHOICE=$(<"$TEMP")
-
-        case $MP_CHOICE in
-            1)
-                MOUNT_POINT="/"
-                ;;
-            2)
-                MOUNT_POINT="/home"
-                ;;
-            3)
-                MOUNT_POINT="/var"
-                ;;
-            4)
-                MOUNT_POINT="/boot"
-                ;;
-            5)
-                MOUNT_POINT="/boot/efi"
-                ;;
-            6)
-                MOUNT_POINT="swap"
-                ;;
-            7)
-                dialog --inputbox "Enter the mount point for partition $PART:" 8 60 2> "$TEMP"
-                MOUNT_POINT=$(<"$TEMP")
-                ;;
-            *)
-                error_exit "Invalid mount point selection. Exiting."
-                ;;
-        esac
-
-        # Prevent duplicate mount points
-        if [[ " ${MOUNT_POINTS[@]} " =~ " ${MOUNT_POINT} " ]]; then
-            error_exit "Mount point $MOUNT_POINT is already assigned to another partition. Exiting."
-        fi
-
-        MOUNT_POINTS["$PART"]="$MOUNT_POINT"
-
-        # Prompt for filesystem type using a menu
-        dialog --clear --title "Filesystem Selection" \
-        --menu "Choose the filesystem for partition $PART ($MOUNT_POINT):" 15 60 5 \
-        1 "btrfs" \
-        2 "ext4" \
-        3 "xfs" \
-        4 "swap" \
-        5 "Other" 2> "$TEMP"
-
-        FS_CHOICE=$(<"$TEMP")
-
-        case $FS_CHOICE in
-            1)
-                FILESYSTEM="btrfs"
-                ;;
-            2)
-                FILESYSTEM="ext4"
-                ;;
-            3)
-                FILESYSTEM="xfs"
-                ;;
-            4)
-                FILESYSTEM="swap"
-                ;;
-            5)
-                dialog --inputbox "Enter the filesystem type for partition $PART:" 8 60 2> "$TEMP"
-                FILESYSTEM=$(<"$TEMP")
-                ;;
-            *)
-                error_exit "Invalid filesystem selection. Exiting."
-                ;;
-        esac
-
-        FILESYSTEMS["$PART"]="$FILESYSTEM"
-    done
-
-    # Display summary and confirm
-    SUMMARY=""
-    for PART in "${PARTITIONS[@]}"; do
-        SUMMARY+="Partition: $PART\nMount Point: ${MOUNT_POINTS[$PART]}\nFilesystem: ${FILESYSTEMS[$PART]}\n\n"
-    done
-
-    dialog --clear --title "Partition Summary" --msgbox "$SUMMARY" 20 60
-
-    # Confirm partition setup
-    dialog --yesno "Proceed with formatting and mounting the partitions as per the summary?" 10 60
+  else
+    dialog --msgbox "Windows partitions detected on $disk. You can choose to install Arch Linux alongside Windows." 10 60
+    # Ask user if they want to proceed with dual boot
+    dialog --yesno "Would you like to install Arch Linux alongside Windows by shrinking an existing partition?" 7 50
     if [ $? -ne 0 ]; then
-        error_exit "Installation aborted by user."
-    fi
-
-    # Format and mount partitions
-    for PART in "${PARTITIONS[@]}"; do
-        FS=${FILESYSTEMS[$PART]}
-        MP=${MOUNT_POINTS[$PART]}
-
-        if [[ "$FS" == "swap" ]]; then
-            # Initialize swap
-            mkswap "$PART"
-            swapon "$PART"
-        else
-            # Format partition
-            if [[ "$FS" == "btrfs" ]]; then
-                mkfs.btrfs -f "$PART"
-            else
-                mkfs."$FS" -F "$PART"
-            fi
-
-            # Mount partition
-            if [[ "$MP" == "/" ]]; then
-                mount "$PART" /mnt
-            else
-                mkdir -p /mnt"$MP"
-                mount "$PART" /mnt"$MP"
-            fi
-        fi
-    done
-
-    # Check if swap is set; if not, prompt for memory compression options
-    SWAP_EXISTS=0
-    for PART in "${PARTITIONS[@]}"; do
-        if [[ "${FILESYSTEMS[$PART]}" == "swap" ]]; then
-            SWAP_EXISTS=1
-            break
-        fi
-    done
-
-    if [ "$SWAP_EXISTS" -eq 0 ]; then
-        # No swap partition; offer memory compression options
-        dialog --clear --title "Memory Compression" \
-        --menu "Choose a memory compression method to enable (optional):" 15 50 4 \
-        1 "zram" \
-        2 "zcache" \
-        3 "zswap" \
-        4 "None" 2> "$TEMP"
-
-        MEM_COMP=$(<"$TEMP")
+      dialog --msgbox "You can select another disk for installation." 6 50
+      disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+      if [ -z "$disk" ]; then
+        dialog --msgbox "No disk selected. Exiting." 5 40
+        clear
+        exit 1
+      fi
     else
-        MEM_COMP="4"  # No memory compression if swap exists
+      # Prompt user to select the Windows partition
+      windows_partition=$(dialog --stdout --title "Select Windows Partition" --menu "Select the main Windows partition to resize:" 15 60 4 $(lsblk -rn -o NAME,SIZE,FSTYPE $disk | grep ntfs | awk '{print $1 " " $2}'))
+      if [ -z "$windows_partition" ]; then
+        dialog --msgbox "No Windows partition selected. Exiting." 5 40
+        clear
+        exit 1
+      fi
+      windows_partition="${disk}${windows_partition}"
+      # Ask user how much space to allocate for Arch Linux
+      arch_space=$(dialog --stdout --inputbox "Enter the amount of space (in GB) you want to allocate for Arch Linux:" 8 40)
+      if [ -z "$arch_space" ]; then
+        dialog --msgbox "No space entered. Exiting." 5 40
+        clear
+        exit 1
+      fi
+      # Shrink Windows partition
+      dialog --infobox "Shrinking Windows partition to create space for Arch Linux..." 7 50
+      parted $disk resizepart ${windows_partition##*p} -${arch_space}G
     fi
-
-    clear
-}
-
-# Function to handle bootloader installation
-install_bootloader() {
-    arch-chroot /mnt /bin/bash <<EOF
-# Install necessary packages
-pacman -S --noconfirm grub efibootmgr networkmanager
-
-# Enable NetworkManager
-systemctl enable NetworkManager
-
-# Detect EFI system
-if [ -d /sys/firmware/efi ]; then
-    mkdir -p /boot/efi
-    mount $EFI_PART /boot/efi
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+  fi
 else
-    # BIOS system
-    grub-install --target=i386-pc $DISK
+  dialog --yesno "No Windows partitions detected. Are you sure you want to erase all data on $disk?" 7 50
+  if [ $? -ne 0 ]; then
+    dialog --msgbox "You can select another disk for installation." 6 50
+    disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1 " " $2}'))
+    if [ -z "$disk" ]; then
+      dialog --msgbox "No disk selected. Exiting." 5 40
+      clear
+      exit 1
+    fi
+  fi
+  # Wipe the disk
+  sgdisk --zap-all $disk
+
+  # Create partitions
+  # Partition 1: EFI System Partition
+  sgdisk -n 1:0:+550M -t 1:ef00 $disk
+  # Partition 2: Root partition
+  sgdisk -n 2:0:0 -t 2:8300 $disk
 fi
 
-# Generate GRUB configuration
-grub-mkconfig -o /boot/grub/grub.cfg
-EOF
-}
+# Get partition names
+if [[ "$disk" == *"nvme"* ]]; then
+  esp="${disk}p1"
+  root_partition="${disk}p2"
+else
+  esp="${disk}1"
+  root_partition="${disk}2"
+fi
 
-# Function to configure system settings in chroot
-configure_system() {
-    arch-chroot /mnt /bin/bash <<EOF
-# Setup Locale
+# Format partitions
+dialog --infobox "Formatting partitions..." 5 40
+mkfs.vfat -F32 $esp
+mkfs.btrfs -f -L Arch $root_partition
+
+# Mount root partition
+mount $root_partition /mnt
+
+# Create Btrfs subvolumes
+btrfs su cr /mnt/@
+btrfs su cr /mnt/@home
+btrfs su cr /mnt/@pkg
+btrfs su cr /mnt/@log
+btrfs su cr /mnt/@snapshots
+
+# Unmount root partition
+umount /mnt
+
+# Mount subvolumes with options
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@ $root_partition /mnt
+mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@home $root_partition /mnt/home
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log $root_partition /mnt/var/log
+mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots $root_partition /mnt/.snapshots
+
+# Mount EFI partition
+mount $esp /mnt/boot/efi
+
+# Detect CPU and offer to install microcode
+cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+microcode_pkg=""
+microcode_img=""
+
+if [[ "$cpu_vendor" == *"intel"* ]]; then
+  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
+  if [ $? -eq 0 ]; then
+    microcode_pkg="intel-ucode"
+    microcode_img="intel-ucode.img"
+  fi
+elif [[ "$cpu_vendor" == *"amd"* ]]; then
+  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
+  if [ $? -eq 0 ]; then
+    microcode_pkg="amd-ucode"
+    microcode_img="amd-ucode.img"
+  fi
+else
+  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
+fi
+
+# Prompt for hostname
+hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
+if [ -z "$hostname" ]; then
+  dialog --msgbox "No hostname entered. Using default 'archlinux'." 6 50
+  hostname="archlinux"
+fi
+
+# Prompt for timezone
+available_timezones=$(find /usr/share/zoneinfo/ -type f | sed 's#/usr/share/zoneinfo/##')
+timezone=$(dialog --stdout --title "Select Timezone" --menu "Select your timezone:" 20 60 15 $(echo "$available_timezones" | nl -w2 -s" "))
+if [ -z "$timezone" ]; then
+  dialog --msgbox "No timezone selected. Using 'UTC' as default." 6 50
+  timezone="UTC"
+fi
+
+# Offer to install btrfs-progs
+dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
+if [ $? -eq 0 ]; then
+  btrfs_pkg="btrfs-progs"
+else
+  btrfs_pkg=""
+fi
+
+# Offer to enable ZRAM
+dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
+if [ $? -eq 0 ]; then
+  zram_pkg="systemd-zram-generator"
+else
+  zram_pkg=""
+fi
+
+# Install base system
+dialog --infobox "Installing base system..." 5 40
+pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg
+
+# Generate fstab
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# Chroot into the new system
+arch-chroot /mnt /bin/bash <<EOF
+# Set the timezone
+ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
+hwclock --systohc
+
+# Set the hostname
+echo "$hostname" > /etc/hostname
+
+# Configure /etc/hosts
+cat <<EOL > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $hostname.localdomain $hostname
+EOL
+
+# Generate locales
 echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-# Setup Timezone
-ln -sf /usr/share/zoneinfo/UTC /etc/localtime
-hwclock --systohc
-
-# Setup Networking
-echo "$HOSTNAME" > /etc/hostname
-
-# Configure /etc/hosts
-echo "127.0.0.1   localhost" > /etc/hosts
-echo "::1         localhost" >> /etc/hosts
-echo "127.0.1.1   $HOSTNAME.localdomain $HOSTNAME" >> /etc/hosts
-
-# Enable NetworkManager
-systemctl enable NetworkManager
-EOF
-}
-
-# Function to configure memory compression
-configure_memory_compression() {
-    if [ "$MEM_COMP" == "1" ]; then
-        # Install and configure zram
-        arch-chroot /mnt pacman -S --noconfirm zram-generator
-        cat <<EOL > /mnt/etc/systemd/zram-generator.conf
+# Configure ZRAM if enabled
+if [ -n "$zram_pkg" ]; then
+  cat <<EOM > /etc/systemd/zram-generator.conf
 [zram0]
 zram-size = ram / 2
-compression-algorithm = lz4
-EOL
-    elif [ "$MEM_COMP" == "2" ]; then
-        # Install and configure zcache
-        arch-chroot /mnt pacman -S --noconfirm zcache
-        # Example configuration; adjust as needed
-        cat <<EOL > /mnt/etc/zcache.conf
-zcache zcache /var/cache/zcache
-EOL
-        arch-chroot /mnt systemctl enable zcache
-    elif [ "$MEM_COMP" == "3" ]; then
-        # Install and configure zswap
-        arch-chroot /mnt pacman -S --noconfirm zswap
-        # Modify GRUB config to include zswap parameters
-        arch-chroot /mnt sed -i 's/^GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="zswap.enabled=1 zswap.compressor=lz4 /' /etc/default/grub
-        arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-    fi
-}
+compression-algorithm = zstd
+EOM
+fi
+EOF
 
-# Main Installation Flow
-
-# Step 1: Choose Partition Scheme
-dialog --clear --title "Partition Scheme Selection" \
---menu "Choose a partition scheme:" 15 60 2 \
-1 "Use Recommended Btrfs Partition Scheme" \
-2 "Manual Partitioning" 2> "$TEMP"
-
-PARTITION_CHOICE=$(cat "$TEMP")
-
-case $PARTITION_CHOICE in
-    1)
-        # Recommended Partition Scheme
-        select_disk
-        recommended_partitioning
-        ;;
-    2)
-        # Manual Partitioning
-        select_disk
-        manual_partitioning
-        ;;
-    *)
-        error_exit "Invalid selection. Exiting."
-        ;;
-esac
-
-# Step 2: Install Base System
-dialog --msgbox "Installing the base system. This may take a few minutes..." 7 50
-pacstrap /mnt base base-devel linux linux-firmware vim dialog
-
-# Step 3: Generate fstab
-genfstab -U /mnt >> /mnt/etc/fstab
-
-# Step 4: Chroot and Configure System
-# Prompt for hostname
-dialog --inputbox "Enter your hostname:" 8 40 2> "$TEMP"
-HOSTNAME=$(cat "$TEMP")
-
-if [[ -z "$HOSTNAME" ]]; then
-    HOSTNAME="archlinux"
+# Offer to install NetworkManager
+dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
+if [ $? -eq 0 ]; then
+  arch-chroot /mnt pacman -Sy --noconfirm networkmanager
+  arch-chroot /mnt systemctl enable NetworkManager
 fi
 
-configure_system
+# Set root password
+dialog --msgbox "You will now set the root password." 6 40
+arch-chroot /mnt passwd
 
-# Step 5: Install Bootloader
-install_bootloader
-
-# Step 6: Configure Memory Compression (if applicable)
-if [ "$MEM_COMP" != "4" ]; then
-    configure_memory_compression
+# Ask if the user wants to use bash or install zsh
+dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
+if [ $? -eq 0 ]; then
+  arch-chroot /mnt pacman -Sy --noconfirm zsh
+  arch-chroot /mnt chsh -s /bin/zsh
 fi
 
-# Step 7: Final Configurations
-arch-chroot /mnt hwclock --systohc
+# Install rEFInd bootloader with Btrfs support and tweaks
+dialog --infobox "Installing rEFInd bootloader..." 5 40
+arch-chroot /mnt pacman -Sy --noconfirm refind
+arch-chroot /mnt refind-install
 
-# Timezone setup (prompt user)
-dialog --inputbox "Enter your timezone (e.g., Europe/London):" 8 60 2> "$TEMP"
-TIMEZONE=$(cat "$TEMP")
+# rEFInd configuration
+# Modify refind.conf
+arch-chroot /mnt sed -i 's/^#enable_mouse/enable_mouse/' /boot/efi/EFI/refind/refind.conf
+arch-chroot /mnt sed -i 's/^#mouse_speed .*/mouse_speed 8/' /boot/efi/EFI/refind/refind.conf
+arch-chroot /mnt sed -i 's/^#resolution .*/resolution max/' /boot/efi/EFI/refind/refind.conf
+arch-chroot /mnt sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/efi/EFI/refind/refind.conf
 
-if [[ -z "$TIMEZONE" ]]; then
-    TIMEZONE="UTC"
+# Create refind_linux.conf with the specified options
+partuuid=$(blkid -s PARTUUID -o value $root_partition)
+initrd_line=""
+if [ -n "$microcode_img" ]; then
+  initrd_line="initrd=@\\boot\\$microcode_img initrd=@\\boot\\initramfs-%v.img"
+else
+  initrd_line="initrd=@\\boot\\initramfs-%v.img"
 fi
 
-arch-chroot /mnt ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-arch-chroot /mnt hwclock --systohc
+cat << EOF > /mnt/boot/refind_linux.conf
+"Boot with standard options"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line"
+EOF
 
-# Finalizing Installation
-dialog --msgbox "Installation complete. Unmounting partitions and rebooting." 7 50
+# Copy refind_linux.conf to rEFInd directory
+cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
 
-# Unmount all mounted partitions and disable swap
-umount -R /mnt
-swapoff -a
+# Create first_login.sh script for initial login instructions
+cat << 'EOM' > /mnt/root/first_login.sh
+#!/bin/bash
 
-# Remove temporary file
-rm -f "$TEMP"
+clear
+cat << 'EOF'
+Welcome to your new Arch Linux system!
 
-# Reboot the system
-reboot
+To create a new user and grant sudo privileges, follow these steps:
+
+1. Create a new user (replace 'username' with your desired username):
+   useradd -m username
+
+2. Set the password for the new user:
+   passwd username
+
+3. Install sudo (if not already installed):
+   pacman -Sy sudo
+
+4. Add the user to the wheel group:
+   usermod -aG wheel username
+
+5. Edit the sudoers file to grant sudo privileges:
+   EDITOR=nano visudo
+
+   Uncomment the line:
+   %wheel ALL=(ALL) ALL
+
+6. Install a text editor (e.g., nano, vim, or emacs) if needed:
+   pacman -Sy nano
+
+You're all set!
+EOF
+
+# Remove the script and its call from .bash_profile
+rm -- "$0"
+sed -i '/first_login.sh/d' ~/.bash_profile
+EOM
+
+# Make the script executable
+chmod +x /mnt/root/first_login.sh
+
+# Add the script to root's .bash_profile
+echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
+
+# Finish
+dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 10 70
+if [ $? -eq 0 ]; then
+  # Reboot the system
+  umount -R /mnt
+  reboot
+else
+  # Drop to the terminal
+  clear
+fi
