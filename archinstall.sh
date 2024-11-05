@@ -16,7 +16,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.2" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.2" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.2).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
 
