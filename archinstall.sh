@@ -16,7 +16,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.2" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
 
@@ -211,8 +211,9 @@ fi
 
 # Prompt for locale
 echo "[DEBUG] Prompting for locale selection"
-available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | nl -w2 -s": ")
-selected_locale=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $available_locales)
+available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | awk '{print NR, $1}')
+selected_number=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $available_locales)
+selected_locale=$(echo "$available_locales" | awk -v num=$selected_number '$1 == num {print $2}')
 if [ -z "$selected_locale" ]; then
   dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
   selected_locale="en_US.UTF-8"
