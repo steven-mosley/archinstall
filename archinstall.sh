@@ -16,7 +16,11 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).\n\nThis version includes bug fixes and improvements for a more stable installation experience." 10 70
+dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
+
+This version includes bug fixes and improvements for a more stable installation experience." 10 70
+  pacman -Sy --noconfirm dialog
+fi
 
 # Clear the screen
 clear
@@ -84,15 +88,30 @@ fi
 # Create partitions
 echo "[DEBUG] Creating partitions on $disk"
 # Partition 1: EFI System Partition
-sleep 2
 sgdisk -n 1:0:+300M -t 1:ef00 $disk
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
   exit 1
 fi
-partprobe $disk
+
+# Wait for the system to recognize the partition changes
+sleep 5
+sgdisk -n 1:0:+300M -t 1:ef00 $disk
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
+  exit 1
+fi
 # Partition 2: Root partition
+sleep 5
 sgdisk -n 2:0:0 -t 2:8300 $disk
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
+  exit 1
+fi
+
+# Wait for the system to recognize the partition changes
+sleep 5
+partprobe $disk
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
   exit 1
@@ -209,7 +228,8 @@ fi
 
 # Prompt for locale
 echo "[DEBUG] Prompting for locale selection"
-selected_locale=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED))
+available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | nl -w2 -s": ")
+selected_locale=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $available_locales)
 if [ -z "$selected_locale" ]; then
   dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
   selected_locale="en_US.UTF-8"
@@ -261,7 +281,7 @@ fi
 
 # Chroot into the new system
 echo "[DEBUG] Entering chroot to configure the new system"
-arch-chroot /mnt <<EOF
+arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
 echo "[DEBUG] Setting timezone to $timezone"
 ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
