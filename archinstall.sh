@@ -242,14 +242,13 @@ zram-size = ram / 2
 compression-algorithm = zstd
 EOM
 fi
-EOF
 
-# Offer to install NetworkManager
-dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
-if [ $? -eq 0 ]; then
-  arch-chroot /mnt pacman -Sy --noconfirm networkmanager
-  arch-chroot /mnt systemctl enable NetworkManager
+# Install NetworkManager if selected
+if [ -n "$networkmanager_pkg" ]; then
+  pacman -Sy --noconfirm $networkmanager_pkg
+  systemctl enable NetworkManager
 fi
+EOF
 
 # Set root password
 dialog --msgbox "You will now set the root password." 6 40
