@@ -19,8 +19,6 @@ fi
 dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
-  pacman -Sy --noconfirm dialog
-fi
 
 # Clear the screen
 clear
@@ -43,11 +41,6 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
-
-dialog --title "Arch Linux Minimal Installer - Version v1.0.1" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.1).
-
-This version includes bug fixes and improvements for a more stable installation experience." 10 70
-
 dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
 
 # Ask if the user wants to use the default Btrfs subvolume scheme
@@ -96,13 +89,8 @@ fi
 
 # Wait for the system to recognize the partition changes
 sleep 5
-sgdisk -n 1:0:+300M -t 1:ef00 $disk
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
-  exit 1
-fi
+
 # Partition 2: Root partition
-sleep 5
 sgdisk -n 2:0:0 -t 2:8300 $disk
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
@@ -111,11 +99,6 @@ fi
 
 # Wait for the system to recognize the partition changes
 sleep 5
-partprobe $disk
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
-  exit 1
-fi
 
 # Get partition names
 echo "[DEBUG] Determining partition names"
@@ -314,7 +297,6 @@ zram-size = ram / 2
 compression-algorithm = zstd
 EOM
 fi
-
 EOF
 
 # Set root password
@@ -351,15 +333,15 @@ echo "[DEBUG] Creating refind_linux.conf"
 partuuid=$(blkid -s PARTUUID -o value $root_partition)
 initrd_line=""
 if [ -n "$microcode_img" ]; then
-  initrd_line="initrd=@\\boot\\$microcode_img initrd=@\\boot\\initramfs-%v.img"
+  initrd_line="initrd=@\boot\$microcode_img initrd=@\boot\initramfs-%v.img"
 else
-  initrd_line="initrd=@\\boot\\initramfs-%v.img"
+  initrd_line="initrd=@\boot\initramfs-%v.img"
 fi
 
 cat << EOF > /mnt/boot/refind_linux.conf
 "Boot with standard options"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line"
-"Boot using fallback initramfs"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\\boot\\initramfs-%v-fallback.img"
-"Boot to terminal"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\\boot\\initramfs-%v.img systemd.unit=multi-user.target"
+"Boot using fallback initramfs"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\boot\initramfs-%v-fallback.img"
+"Boot to terminal"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\boot\initramfs-%v.img systemd.unit=multi-user.target"
 EOF
 
 # Copy refind_linux.conf to rEFInd directory
@@ -413,7 +395,9 @@ chmod +x /mnt/root/first_login.sh
 echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
 
 # Finish installation
-dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?\n\nSelect 'No' to drop to the terminal." 10 70
+dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?
+
+Select 'No' to drop to the terminal." 10 70
 if [ $? -eq 0 ]; then
   # Reboot the system
   umount -R /mnt
