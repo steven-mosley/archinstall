@@ -219,7 +219,7 @@ fi
 
 # Install base system
 dialog --infobox "Installing base system..." 5 40
-pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg
+pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -293,8 +293,7 @@ fi
 EOF
 
 # Set root password
-dialog --msgbox "You will now set the root password." 6 40
-arch-chroot /mnt passwd
+arch-chroot /mnt passwd root
 
 # Ask if the user wants to use bash or install zsh
 dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
