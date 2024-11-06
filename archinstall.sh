@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
-# Version: v1.0.3 - Updated with bug fixes and improvements
+# Version: v1.0.4 - Updated with bug fixes and improvements
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.3" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.3).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.4" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.4).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
 
@@ -286,7 +286,7 @@ export timezone
 export selected_locale
 export zram_pkg
 
-# Chroot into the new system
+# Chroot into the new system for configurations
 echo "[DEBUG] Entering chroot to configure the new system"
 arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
@@ -322,11 +322,11 @@ compression-algorithm = zstd
 EOM
 fi
 
-# Set the root password
-echo "[DEBUG] Setting root password"
-passwd
-
 EOF
+
+# Set the root password interactively
+echo "[DEBUG] Setting root password"
+arch-chroot /mnt passwd
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
@@ -435,13 +435,16 @@ else
   for dir in /dev /dev/pts /proc /sys /run; do
     mount --bind $dir /mnt$dir
   done
-  # Drop into the chroot environment
+  # Drop into the chroot environment and pause script execution
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   arch-chroot /mnt /bin/bash
-  # After exiting chroot, unmount filesystems
-  echo "[DEBUG] Cleaning up chroot environment"
-  for dir in /run /sys /proc /dev/pts /dev; do
-    umount /mnt$dir
-  done
-  umount -R /mnt
+
+  # After exiting chroot, prompt the user
+  dialog --yesno "You have exited the chroot environment. Would you like to reboot now?" 7 50
+  if [ $? -eq 0 ]; then
+    umount -R /mnt
+    reboot
+  else
+    echo "[DEBUG] Disks remain mounted. You can perform additional actions."
+  fi
 fi
