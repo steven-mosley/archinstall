@@ -485,5 +485,8 @@ else
   # Drop into the chroot environment
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   echo "Type 'exit' to leave the chroot environment and complete the installation."
+  mount --rbind /dev /mnt/dev
+  mount --rbind /proc /mnt/proc
+  mount --rbind /sys /mnt/sys
   exec arch-chroot /mnt /bin/bash
 fi
