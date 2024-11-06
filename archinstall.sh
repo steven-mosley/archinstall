@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.21 - Enhanced progress feedback and combined optional features selection
+# Version: v1.0.22 - Fixed option parsing in optional features selection
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.21" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.21).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.22" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.22).
 
-This version provides enhanced progress feedback during the base system installation and combines optional feature selections into a single dialog." 10 70
+This version fixes the optional features selection parsing to ensure packages are correctly installed." 10 70
 
 # Clear the screen
 clear
@@ -188,14 +188,14 @@ else
   create_user="no"
 fi
 
-# Combine optional features into a single selection dialog
+# Combine optional features into a single selection dialog with descriptive tags
 options=(
-  1 "Install btrfs-progs" off
-  2 "Install NetworkManager" off
-  3 "Enable ZRAM" off
+  "btrfs" "Install btrfs-progs" off
+  "networkmanager" "Install NetworkManager" off
+  "zram" "Enable ZRAM" off
 )
 
-selected_options=$(dialog --stdout --checklist "Select optional features:" 15 60 4 "${options[@]}")
+selected_options=$(dialog --stdout --separate-output --checklist "Select optional features (use spacebar to select):" 15 60 4 "${options[@]}")
 if [ -z "$selected_options" ]; then
   dialog --msgbox "No optional features selected." 5 40
 fi
@@ -208,13 +208,13 @@ zram_pkg=""
 # Process selected options
 for opt in $selected_options; do
   case $opt in
-    1)
+    btrfs)
       btrfs_pkg="btrfs-progs"
       ;;
-    2)
+    networkmanager)
       networkmanager_pkg="networkmanager"
       ;;
-    3)
+    zram)
       zram_pkg="zram-generator"
       ;;
   esac
@@ -325,6 +325,9 @@ fi
 
 # Install base system with enhanced progress feedback
 packages=(base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg)
+
+# Remove any empty elements from the packages array
+packages=(${packages[@]})
 
 # Step 1: Updating package databases
 dialog --infobox "Updating package databases..." 5 50
