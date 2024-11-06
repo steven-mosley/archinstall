@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.27 - Fixed variable scope issue when processing selected options
+# Version: v1.0.28 - Fixed partition creation and existing partitions display
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -13,25 +13,30 @@ fi
 if ! command -v dialog &> /dev/null; then
   pacman -Sy --noconfirm dialog > /dev/null 2>&1
 fi
+if ! command -v sgdisk &> /dev/null; then
+  pacman -Sy --noconfirm gptfdisk > /dev/null 2>&1
+fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.27" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.27).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.28" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.28).
 
-This version fixes a variable scope issue when processing selected options from the dialog checklist." 10 70
+This version fixes issues with partition creation and displays existing partitions before proceeding." 10 70
 
 # Clear the screen
 clear
 
 # Check for UEFI mode
 if [ ! -d /sys/firmware/efi/efivars ]; then
-  dialog --msgbox "Your system is not booted in UEFI mode.\nPlease reboot in UEFI mode to use this installer." 8 60
+  dialog --msgbox "Your system is not booted in UEFI mode.
+Please reboot in UEFI mode to use this installer." 8 60
   clear
   exit 1
 fi
 
 # Check internet connection
 if ! ping -c 1 archlinux.org &> /dev/null; then
-  dialog --msgbox "Internet connection is required.\nPlease connect to the internet and rerun the installer." 7 60
+  dialog --msgbox "Internet connection is required.
+Please connect to the internet and rerun the installer." 7 60
   clear
   exit 1
 fi
@@ -61,7 +66,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Disk selection
-disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE,TYPE | awk '$3=="disk" {print "/dev/" $1 " " $2}'))
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1, "(" $2 ")"}'))
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
   clear
@@ -69,12 +74,12 @@ if [ -z "$disk" ]; then
 fi
 
 # Detect existing partitions
-existing_partitions=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")
+existing_partitions=$(lsblk -ln -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^[^ ]+ +[^ ]+ +part")
 if [ -n "$existing_partitions" ]; then
   # Display existing partitions
   dialog --title "Existing Partitions on $disk" --msgbox "The following partitions were found on $disk:
 
-$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")" 20 70
+$existing_partitions" 20 70
 
   # Ask user whether to destroy partitions
   dialog --yesno "Existing partitions detected on $disk.
@@ -85,9 +90,8 @@ Select 'No' to cancel the installation." 15 70
   if [ $? -eq 0 ]; then
     # Destroy existing partitions
     dialog --infobox "Destroying existing partitions on $disk..." 5 50
-    sgdisk --zap-all $disk > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-      dialog --msgbox "Failed to destroy partitions on $disk. Exiting." 5 40
+    if ! sgdisk --zap-all "$disk" > /tmp/sgdisk_zap_output 2>&1; then
+      dialog --msgbox "Failed to destroy partitions on $disk. Error: $(cat /tmp/sgdisk_zap_output)" 10 60
       exit 1
     fi
   else
@@ -98,7 +102,7 @@ Select 'No' to cancel the installation." 15 70
 fi
 
 # Get partition names (after partitions are created)
-if [[ "$disk" == *"nvme"* ]]; then
+if [[ "$(basename $disk)" == nvme* ]]; then
   esp="${disk}p1"
   root_partition="${disk}p2"
 else
@@ -250,13 +254,15 @@ microcode_pkg=""
 microcode_img=""
 
 if [[ "$cpu_vendor" == *"intel"* ]]; then
-  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
+  dialog --yesno "CPU detected: Intel
+Would you like to install intel-ucode?" 7 60
   if [ $? -eq 0 ]; then
     microcode_pkg="intel-ucode"
     microcode_img="intel-ucode.img"
   fi
 elif [[ "$cpu_vendor" == *"amd"* ]]; then
-  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
+  dialog --yesno "CPU detected: AMD
+Would you like to install amd-ucode?" 7 60
   if [ $? -eq 0 ]; then
     microcode_pkg="amd-ucode"
     microcode_img="amd-ucode.img"
@@ -270,9 +276,8 @@ fi
 # Create partitions
 dialog --infobox "Creating partitions on $disk..." 5 50
 # Partition 1: EFI System Partition
-sgdisk -n 1:0:+300M -t 1:ef00 $disk > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
+if ! sgdisk -n 1:0:+300M -t 1:ef00 "$disk" > /tmp/sgdisk_efi_output 2>&1; then
+  dialog --msgbox "Failed to create EFI partition on $disk. Error: $(cat /tmp/sgdisk_efi_output)" 10 60
   exit 1
 fi
 
@@ -280,23 +285,25 @@ fi
 sleep 2
 
 # Partition 2: Root partition
-sgdisk -n 2:0:0 -t 2:8300 $disk > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
+if ! sgdisk -n 2:0:0 -t 2:8300 "$disk" > /tmp/sgdisk_root_output 2>&1; then
+  dialog --msgbox "Failed to create root partition on $disk. Error: $(cat /tmp/sgdisk_root_output)" 10 60
   exit 1
 fi
 
 # Wait for the system to recognize the partition changes
 sleep 2
 
+# Clean up temporary files
+rm -f /tmp/sgdisk_zap_output /tmp/sgdisk_efi_output /tmp/sgdisk_root_output
+
 # Format partitions
 dialog --infobox "Formatting partitions..." 5 50
-mkfs.vfat -F32 -n EFI $esp > /dev/null 2>&1
+mkfs.vfat -F32 -n EFI "$esp" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to format EFI partition. Exiting." 5 40
   exit 1
 fi
-mkfs.btrfs -f -L Arch $root_partition > /dev/null 2>&1
+mkfs.btrfs -f -L Arch "$root_partition" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to format root partition. Exiting." 5 40
   exit 1
@@ -304,7 +311,7 @@ fi
 
 # Mount root partition
 dialog --infobox "Mounting root partition..." 5 50
-mount $root_partition /mnt
+mount "$root_partition" /mnt
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root partition. Exiting." 5 40
   exit 1
@@ -328,16 +335,16 @@ umount /mnt
 # Mount subvolumes with options
 mount_options="noatime,compress=zstd,discard=async,space_cache=v2"
 dialog --infobox "Mounting Btrfs subvolumes..." 5 50
-mount -o $mount_options,subvol=@ $root_partition /mnt
+mount -o $mount_options,subvol=@ "$root_partition" /mnt
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
   exit 1
 fi
 mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-mount -o $mount_options,subvol=@home $root_partition /mnt/home
-mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
-mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
-mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
+mount -o $mount_options,subvol=@home "$root_partition" /mnt/home
+mount -o $mount_options,subvol=@pkg "$root_partition" /mnt/var/cache/pacman/pkg
+mount -o $mount_options,subvol=@log "$root_partition" /mnt/var/log
+mount -o $mount_options,subvol=@snapshots "$root_partition" /mnt/.snapshots
 
 # Mount EFI partition at /mnt/efi before chrooting
 dialog --infobox "Mounting EFI partition at /mnt/efi..." 5 50
@@ -368,7 +375,8 @@ if [ $? -ne 0 ]; then
 fi
 
 # Step 2: Downloading packages
-dialog --title "Downloading Packages" --gauge "Downloading packages...\nThis may take a while." 10 70 0 < <(
+dialog --title "Downloading Packages" --gauge "Downloading packages...
+This may take a while." 10 70 0 < <(
   total_packages=$(pacman -Sp --needed --noconfirm "${packages[@]}" 2>/dev/null | wc -l)
   pacman -Sw --noconfirm --needed "${packages[@]}" > /tmp/pacman_download.log 2>&1 &
   pid=$!
@@ -388,7 +396,8 @@ if [ $? -ne 0 ]; then
 fi
 
 # Step 3: Installing base system
-dialog --title "Installing Base System" --gauge "Installing base system...\nThis may take a while." 10 70 0 < <(
+dialog --title "Installing Base System" --gauge "Installing base system...
+This may take a while." 10 70 0 < <(
   total_packages=$(pacman -Qq --cachedir /var/cache/pacman/pkg "${packages[@]}" 2>/dev/null | wc -l)
   pacstrap /mnt "${packages[@]}" > /tmp/pacman_install.log 2>&1 &
   pid=$!
