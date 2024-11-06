@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.7 - Includes chroot fix, password validation, and user account setup
+# Version: v1.0.9 - Uses arch-chroot directly for chroot environment
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -9,15 +9,15 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Install dialog if not already installed
+# Install necessary packages if not already installed
 if ! command -v dialog &> /dev/null; then
   pacman -Sy --noconfirm dialog
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.7" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.7).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.9" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.9).
 
-This version includes bug fixes and improvements for a more stable installation experience." 10 70
+This version includes all the features and fixes we've discussed, including proper chroot handling." 10 70
 
 # Clear the screen
 clear
@@ -484,9 +484,10 @@ else
   clear
   # Bind mount necessary filesystems for chroot
   echo "[DEBUG] Preparing chroot environment"
-  for dir in /dev /dev/pts /proc /sys /run; do
-    mount --bind $dir /mnt$dir
+  for dir in /dev /proc /sys /run; do
+    mount --bind "$dir" "/mnt$dir"
   done
+
   # Drop into the chroot environment
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   echo "Type 'exit' to leave the chroot environment and complete the installation."
@@ -495,8 +496,8 @@ else
 
   # After exiting chroot, unmount filesystems
   echo "[DEBUG] Cleaning up chroot environment"
-  for dir in /run /sys /proc /dev/pts /dev; do
-    umount /mnt$dir
+  for dir in /run /sys /proc /dev; do
+    umount "/mnt$dir"
   done
   umount -R /mnt
 fi
