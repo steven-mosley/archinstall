@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.17 - Uses --no-mount option with refind-install to prevent double mounting
+# Version: v1.0.18 - Mounts EFI partition at /efi and uses --no-mount option with refind-install
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.17" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.17).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.18" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.18).
 
-This version uses the --no-mount option with refind-install to prevent the EFI partition from being mounted multiple times." 10 70
+This version mounts the EFI partition at /efi and uses the --no-mount option with refind-install to prevent the EFI partition from being mounted multiple times." 10 70
 
 # Clear the screen
 clear
@@ -312,15 +312,15 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
   exit 1
 fi
-mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
+mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
 mount -o $mount_options,subvol=@home $root_partition /mnt/home
 mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
 mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
 mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
 
-# **Mount EFI partition before chrooting**
-echo "[DEBUG] Mounting EFI partition $esp"
-mount "$esp" /mnt/boot/efi
+# **Mount EFI partition at /mnt/efi before chrooting**
+echo "[DEBUG] Mounting EFI partition $esp at /mnt/efi"
+mount "$esp" /mnt/efi
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
   exit 1
@@ -433,10 +433,10 @@ fi
 
 # rEFInd configuration
 echo "[DEBUG] Modifying rEFInd configuration"
-sed -i 's/^#enable_mouse/enable_mouse/' /boot/efi/EFI/refind/refind.conf
-sed -i 's/^#mouse_speed .*/mouse_speed 8/' /boot/efi/EFI/refind/refind.conf
-sed -i 's/^#resolution .*/resolution max/' /boot/efi/EFI/refind/refind.conf
-sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/efi/EFI/refind/refind.conf
+sed -i 's/^#enable_mouse/enable_mouse/' /efi/EFI/refind/refind.conf
+sed -i 's/^#mouse_speed .*/mouse_speed 8/' /efi/EFI/refind/refind.conf
+sed -i 's/^#resolution .*/resolution max/' /efi/EFI/refind/refind.conf
+sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /efi/EFI/refind/refind.conf
 
 # Create refind_linux.conf with the specified options
 echo "[DEBUG] Creating refind_linux.conf"
