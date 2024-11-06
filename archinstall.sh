@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.9 - Uses arch-chroot directly for chroot environment
+# Version: v1.0.10 - Uses arch-chroot directly for chroot environment
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.9" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.9).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.10" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.10).
 
 This version includes all the features and fixes we've discussed, including proper chroot handling." 10 70
 
@@ -493,11 +493,4 @@ else
   echo "Type 'exit' to leave the chroot environment and complete the installation."
   sleep 2
   arch-chroot /mnt /bin/bash
-
-  # After exiting chroot, unmount filesystems
-  echo "[DEBUG] Cleaning up chroot environment"
-  for dir in /run /sys /proc /dev; do
-    umount "/mnt$dir"
-  done
-  umount -R /mnt
 fi
