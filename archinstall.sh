@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.11 - Corrected script with chroot and EFI partition mounting fixes
+# Version: v1.0.12 - Fixes issue with EFI partition not being mounted inside chroot
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.11" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.11).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.12" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.12).
 
 This version includes all the features and fixes we've discussed, including proper chroot handling and EFI partition mounting." 10 70
 
@@ -349,6 +349,12 @@ export username
 export user_password
 export grant_sudo
 
+# **Mount necessary filesystems before chrooting**
+echo "[DEBUG] Mounting necessary filesystems for chroot"
+for dir in dev proc sys run; do
+  mount --rbind "/$dir" "/mnt/$dir"
+done
+
 # Chroot into the new system for configurations
 echo "[DEBUG] Entering chroot to configure the new system"
 arch-chroot /mnt /bin/bash <<EOF_VAR
@@ -470,6 +476,12 @@ fi
 
 EOF_VAR
 
+# **Unmount the filesystems after chrooting**
+echo "[DEBUG] Unmounting filesystems after initial chroot"
+for dir in dev proc sys run; do
+  umount -l "/mnt/$dir"
+done
+
 # Clear sensitive variables
 unset root_password
 unset user_password
@@ -486,7 +498,7 @@ else
   # Clear the screen
   clear
   # Bind mount necessary filesystems for chroot
-  echo "[DEBUG] Preparing chroot environment"
+  echo "[DEBUG] Preparing chroot environment for interactive session"
   for dir in dev proc sys run; do
     mount --rbind "/$dir" "/mnt/$dir"
   done
@@ -500,7 +512,7 @@ else
   arch-chroot /mnt /bin/bash < /dev/tty > /dev/tty 2>&1
 
   # After exiting chroot, unmount filesystems
-  echo "[DEBUG] Cleaning up chroot environment"
+  echo "[DEBUG] Cleaning up chroot environment after interactive session"
   for dir in dev proc sys run; do
     umount -l "/mnt/$dir"
   done
