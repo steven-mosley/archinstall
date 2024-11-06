@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.26 - Fixed processing of selected options from dialog checklist
+# Version: v1.0.27 - Fixed variable scope issue when processing selected options
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.26" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.26).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.27" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.27).
 
-This version fixes the processing of selected options from the dialog checklist to ensure package names are correctly assigned." 10 70
+This version fixes a variable scope issue when processing selected options from the dialog checklist." 10 70
 
 # Clear the screen
 clear
@@ -40,10 +40,20 @@ fi
 timedatectl set-ntp true
 
 # Welcome message with extended information
-dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
+dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.
+
+This installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
 
 # Ask if the user wants to use the default Btrfs subvolume scheme
-dialog --yesno "The default Btrfs subvolume scheme is as follows:\n\n@ mounted at /\n@home mounted at /home\n@pkg mounted at /var/cache/pacman/pkg\n@log mounted at /var/log\n@snapshots mounted at /.snapshots\n\nWould you like to use this scheme?" 15 70
+dialog --yesno "The default Btrfs subvolume scheme is as follows:
+
+@ mounted at /
+@home mounted at /home
+@pkg mounted at /var/cache/pacman/pkg
+@log mounted at /var/log
+@snapshots mounted at /.snapshots
+
+Would you like to use this scheme?" 15 70
 if [ $? -ne 0 ]; then
   dialog --msgbox "Installation canceled. Exiting." 5 40
   clear
@@ -62,10 +72,16 @@ fi
 existing_partitions=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")
 if [ -n "$existing_partitions" ]; then
   # Display existing partitions
-  dialog --title "Existing Partitions on $disk" --msgbox "The following partitions were found on $disk:\n\n$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")" 20 70
+  dialog --title "Existing Partitions on $disk" --msgbox "The following partitions were found on $disk:
+
+$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")" 20 70
 
   # Ask user whether to destroy partitions
-  dialog --yesno "Existing partitions detected on $disk.\n\nWould you like to destroy all partitions on $disk and continue with the installation?\n\nSelect 'No' to cancel the installation." 15 70
+  dialog --yesno "Existing partitions detected on $disk.
+
+Would you like to destroy all partitions on $disk and continue with the installation?
+
+Select 'No' to cancel the installation." 15 70
   if [ $? -eq 0 ]; then
     # Destroy existing partitions
     dialog --infobox "Destroying existing partitions on $disk..." 5 50
@@ -208,8 +224,8 @@ btrfs_pkg=""
 networkmanager_pkg=""
 zram_pkg=""
 
-# Process selected options correctly
-echo "$selected_options" | while IFS= read -r opt; do
+# Process selected options without subshell
+while IFS= read -r opt; do
   case "$opt" in
     btrfs)
       btrfs_pkg="btrfs-progs"
@@ -221,7 +237,7 @@ echo "$selected_options" | while IFS= read -r opt; do
       zram_pkg="zram-generator"
       ;;
   esac
-done
+done <<< "$selected_options"
 
 # Trim any whitespace (just in case)
 btrfs_pkg=$(echo "$btrfs_pkg" | xargs)
