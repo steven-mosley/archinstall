@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
-# Version: v1.0.4 - Updated with bug fixes and improvements
+# Version: v1.0.6 - Updated with root password prompt and chroot fixes
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.4" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.4).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.6" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.6).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
 
@@ -262,6 +262,21 @@ else
   zram_pkg=""
 fi
 
+# Prompt for root password
+echo "[DEBUG] Prompting for root password"
+root_password=$(dialog --stdout --insecure --passwordbox "Enter a root password:" 8 40)
+if [ -z "$root_password" ]; then
+  dialog --msgbox "No password entered. You must set a root password." 6 50
+  exit 1
+fi
+
+# Confirm root password
+root_password_confirm=$(dialog --stdout --insecure --passwordbox "Confirm the root password:" 8 40)
+if [ "$root_password" != "$root_password_confirm" ]; then
+  dialog --msgbox "Passwords do not match. Please run the installer again." 6 50
+  exit 1
+fi
+
 # Install base system
 echo "[DEBUG] Installing base system"
 dialog --infobox "Installing base system..." 5 40
@@ -285,6 +300,7 @@ export hostname
 export timezone
 export selected_locale
 export zram_pkg
+export root_password
 
 # Chroot into the new system for configurations
 echo "[DEBUG] Entering chroot to configure the new system"
@@ -322,11 +338,15 @@ compression-algorithm = zstd
 EOM
 fi
 
+# Set the root password
+echo "[DEBUG] Setting root password"
+echo "root:$root_password" | chpasswd
+
 EOF
 
-# Set the root password interactively
-echo "[DEBUG] Setting root password"
-arch-chroot /mnt passwd
+# Clear the root password variable for security
+unset root_password
+unset root_password_confirm
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
@@ -435,16 +455,14 @@ else
   for dir in /dev /dev/pts /proc /sys /run; do
     mount --bind $dir /mnt$dir
   done
-  # Drop into the chroot environment and pause script execution
+  # Drop into the chroot environment
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   arch-chroot /mnt /bin/bash
 
-  # After exiting chroot, prompt the user
-  dialog --yesno "You have exited the chroot environment. Would you like to reboot now?" 7 50
-  if [ $? -eq 0 ]; then
-    umount -R /mnt
-    reboot
-  else
-    echo "[DEBUG] Disks remain mounted. You can perform additional actions."
-  fi
+  # After exiting chroot, unmount filesystems
+  echo "[DEBUG] Cleaning up chroot environment"
+  for dir in /run /sys /proc /dev/pts /dev; do
+    umount /mnt$dir
+  done
+  umount -R /mnt
 fi
