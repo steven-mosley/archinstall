@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.29 - Fixed disk selection and ensured $disk is properly assigned
+# Version: v1.0.30 - Display existing partitions in disk selection menu
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -18,9 +18,9 @@ if ! command -v sgdisk &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.29" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.29).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.30" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.30).
 
-This version fixes issues with disk selection and ensures the \$disk variable is properly assigned." 10 70
+This version displays existing partitions in the disk selection menu for better clarity." 10 70
 
 # Clear the screen
 clear
@@ -67,57 +67,64 @@ fi
 
 # Build disk options array
 disk_options=()
-while read -r line; do
-  name=$(echo "$line" | awk '{print $1}')
-  size=$(echo "$line" | awk '{print $2}')
-  disk_options+=("/dev/$name" "${size}GiB")
+while read -r disk_line; do
+  disk_name=$(echo "$disk_line" | awk '{print $1}')
+  disk_size=$(echo "$disk_line" | awk '{print $2}')
+  disk="/dev/$disk_name"
+
+  # Get partitions for this disk
+  partitions=$(lsblk -ln -o NAME,SIZE -x NAME "$disk" | grep -E "^$disk_name[[:alpha:]]+" | awk '{printf "    └─%s (%s GiB)\n", $1, $2}')
+
+  # If no partitions, show total free space
+  if [ -z "$partitions" ]; then
+    disk_info="Size: ${disk_size} GiB (No partitions)"
+  else
+    partition_count=$(echo "$partitions" | wc -l)
+    disk_info="Size: ${disk_size} GiB (${partition_count} partitions)"
+  fi
+
+  # Add to disk options
+  disk_options+=("$disk" "$disk_info")
 done < <(lsblk -dn -o NAME,SIZE | grep -E 'sd|hd|vd|nvme|mmcblk')
 
 # Display disk selection menu
-disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 "${disk_options[@]}")
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:
+
+Use arrow keys to navigate and Enter to select." 20 70 10 "${disk_options[@]}")
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
   clear
   exit 1
 fi
 
-# Confirm selected disk
-dialog --yesno "You have selected $disk for installation.
+# Show selected disk details
+disk_summary=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk")
+dialog --title "Selected Disk: $disk" --msgbox "You have selected the following disk:
+
+$disk_summary
+
 All data on this disk will be erased.
 
-Do you want to continue?" 10 60
+Do you want to continue?" 20 70
 if [ $? -ne 0 ]; then
   dialog --msgbox "Installation canceled by user. Exiting." 5 40
   clear
   exit 1
 fi
 
-# Detect existing partitions
-existing_partitions=$(lsblk -ln -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^[^ ]+ +[^ ]+ +part")
-if [ -n "$existing_partitions" ]; then
-  # Display existing partitions
-  dialog --title "Existing Partitions on $disk" --msgbox "The following partitions were found on $disk:
+# Confirm selected disk
+dialog --yesno "Are you sure you want to erase all data on $disk and proceed with the installation?" 7 60
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Installation canceled by user. Exiting." 5 40
+  clear
+  exit 1
+fi
 
-$existing_partitions" 20 70
-
-  # Ask user whether to destroy partitions
-  dialog --yesno "Existing partitions detected on $disk.
-
-Would you like to destroy all partitions on $disk and continue with the installation?
-
-Select 'No' to cancel the installation." 15 70
-  if [ $? -eq 0 ]; then
-    # Destroy existing partitions
-    dialog --infobox "Destroying existing partitions on $disk..." 5 50
-    if ! sgdisk --zap-all "$disk" > /tmp/sgdisk_zap_output 2>&1; then
-      dialog --msgbox "Failed to destroy partitions on $disk. Error: $(cat /tmp/sgdisk_zap_output)" 10 60
-      exit 1
-    fi
-  else
-    dialog --msgbox "Installation canceled by user. Exiting." 5 50
-    clear
-    exit 1
-  fi
+# Destroy existing partitions
+dialog --infobox "Destroying existing partitions on $disk..." 5 50
+if ! sgdisk --zap-all "$disk" > /tmp/sgdisk_zap_output 2>&1; then
+  dialog --msgbox "Failed to destroy partitions on $disk. Error: $(cat /tmp/sgdisk_zap_output)" 10 60
+  exit 1
 fi
 
 # Wait for the system to recognize the partition changes
