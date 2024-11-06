@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.32 - Fixed progress bar issues and improved disk selection flow
+# Version: v1.0.33 - Fixed partition detection inconsistencies and improved progress indicators
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -16,11 +16,17 @@ fi
 if ! command -v sgdisk &> /dev/null; then
   pacman -Sy --noconfirm gptfdisk > /dev/null 2>&1
 fi
+if ! command -v lsblk &> /dev/null; then
+  pacman -Sy --noconfirm util-linux > /dev/null 2>&1
+fi
+if ! command -v pacstrap &> /dev/null; then
+  pacman -Sy --noconfirm arch-install-scripts > /dev/null 2>&1
+fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.32" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.32).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.33" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.33).
 
-This version fixes progress bar issues and improves the disk selection and partitioning flow." 10 70
+This version fixes partition detection inconsistencies and improves the progress indicators." 10 70
 
 # Clear the screen
 clear
@@ -65,6 +71,12 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+# Function to retrieve existing partitions
+get_partitions() {
+  local disk="$1"
+  lsblk -ln -o NAME,TYPE,SIZE "$disk" | awk '$2 == "part" {print $1, $3}'
+}
+
 # Build disk options array
 disk_options=()
 while read -r disk_line; do
@@ -73,14 +85,15 @@ while read -r disk_line; do
   disk="/dev/$disk_name"
 
   # Get partitions for this disk
-  partitions=$(lsblk -ln -o NAME,SIZE -x NAME "$disk" | grep -E "^$disk_name[[:alnum:]]+" | awk '{printf "    └─%s (%s GiB)\n", $1, $2}')
-
-  # If no partitions, show total free space
-  if [ -z "$partitions" ]; then
+  partitions=$(get_partitions "$disk")
+  
+  # Count partitions
+  partition_count=$(echo "$partitions" | wc -l)
+  
+  if [ "$partition_count" -eq 0 ]; then
     disk_info="Size: ${disk_size} GiB (No partitions)"
   else
-    partition_count=$(echo "$partitions" | wc -l)
-    disk_info="Size: ${disk_size} GiB (${partition_count} partitions)"
+    disk_info="Size: ${disk_size} GiB ($partition_count partition(s))"
   fi
 
   # Add to disk options
@@ -98,7 +111,7 @@ if [ -z "$disk" ]; then
 fi
 
 # Show existing partitions if any
-existing_partitions=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")
+existing_partitions=$(get_partitions "$disk")
 if [ -n "$existing_partitions" ]; then
   dialog --title "Existing Partitions on $disk" --yesno "The following partitions exist on $disk:
 
@@ -176,7 +189,7 @@ fi
 sleep 2
 
 # Get partition names (after partitions are created)
-if [[ "$(basename $disk)" == nvme* ]] || [[ "$(basename $disk)" == mmcblk* ]]; then
+if [[ "$(basename "$disk")" == nvme* ]] || [[ "$(basename "$disk")" == mmcblk* ]]; then
   esp="${disk}p1"
   root_partition="${disk}p2"
 else
@@ -201,7 +214,7 @@ if [ -z "$region" ]; then
   dialog --msgbox "No region selected. Using 'UTC' as default." 6 50
   timezone="UTC"
 else
-  available_cities=$(ls /usr/share/zoneinfo/$region)
+  available_cities=$(ls /usr/share/zoneinfo/"$region")
   city=$(dialog --stdout --title "Select City" --menu "Select your city:" 20 60 15 $(echo "$available_cities" | awk '{print $1, $1}'))
   if [ -z "$city" ]; then
     dialog --msgbox "No city selected. Using 'UTC' as default." 6 50
@@ -348,36 +361,30 @@ else
   dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
 fi
 
-# All dialogs are now completed before installation starts
+# Combine optional features into the packages array
+packages=(base linux linux-firmware)
 
-# Format partitions
-dialog --infobox "Formatting partitions..." 5 50
-mkfs.vfat -F32 -n EFI "$esp" > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to format EFI partition. Exiting." 5 40
-  exit 1
-fi
+# Append optional packages if selected
+[ -n "$microcode_pkg" ] && packages+=("$microcode_pkg")
+[ -n "$btrfs_pkg" ] && packages+=("$btrfs_pkg")
+[ -n "$zram_pkg" ] && packages+=("$zram_pkg")
+[ -n "$networkmanager_pkg" ] && packages+=("$networkmanager_pkg")
+
+# Create Btrfs subvolumes
+dialog --infobox "Creating Btrfs subvolumes..." 5 50
 mkfs.btrfs -f -L Arch "$root_partition" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to format root partition. Exiting." 5 40
+  dialog --msgbox "Failed to format root partition as Btrfs. Exiting." 5 40
   exit 1
 fi
 
-# Mount root partition
-dialog --infobox "Mounting root partition..." 5 50
 mount "$root_partition" /mnt
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root partition. Exiting." 5 40
   exit 1
 fi
 
-# Create Btrfs subvolumes
-dialog --infobox "Creating Btrfs subvolumes..." 5 50
 btrfs su cr /mnt/@ > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to create @ subvolume. Exiting." 5 40
-  exit 1
-fi
 btrfs su cr /mnt/@home > /dev/null 2>&1
 btrfs su cr /mnt/@pkg > /dev/null 2>&1
 btrfs su cr /mnt/@log > /dev/null 2>&1
@@ -394,6 +401,7 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
   exit 1
 fi
+
 mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
 mount -o $mount_options,subvol=@home "$root_partition" /mnt/home
 mount -o $mount_options,subvol=@pkg "$root_partition" /mnt/var/cache/pacman/pkg
@@ -407,16 +415,6 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
   exit 1
 fi
-
-# Construct the packages array
-# Initialize the packages array with mandatory packages
-packages=(base linux linux-firmware)
-
-# Append optional packages if selected
-[ -n "$microcode_pkg" ] && packages+=("$microcode_pkg")
-[ -n "$btrfs_pkg" ] && packages+=("$btrfs_pkg")
-[ -n "$zram_pkg" ] && packages+=("$zram_pkg")
-[ -n "$networkmanager_pkg" ] && packages+=("$networkmanager_pkg")
 
 # Install base system
 dialog --infobox "Installing base system...
