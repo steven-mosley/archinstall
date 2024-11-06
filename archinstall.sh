@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.13 - Mounts EFI partition outside chroot to resolve mounting issues
+# Version: v1.0.14 - Adjusted to prevent double mounting of the EFI partition
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.13" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.13).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.14" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.14).
 
-This version includes all the features and fixes we've discussed, including proper chroot handling and EFI partition mounting." 10 70
+This version includes all the features and fixes we've discussed, including preventing double mounting of the EFI partition." 10 70
 
 # Clear the screen
 clear
@@ -318,13 +318,7 @@ mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
 mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
 mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
 
-# **Mount EFI partition outside chroot**
-echo "[DEBUG] Mounting EFI partition $esp"
-mount "$esp" /mnt/boot/efi
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
-  exit 1
-fi
+# **Do not mount EFI partition during installation**
 
 # Install base system
 echo "[DEBUG] Installing base system"
@@ -342,6 +336,10 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to generate fstab. Exiting." 5 40
   exit 1
 fi
+
+# **Manually add EFI partition to fstab**
+echo "[DEBUG] Adding EFI partition to fstab"
+echo "UUID=$(blkid -s UUID -o value $esp)  /boot/efi  vfat  umask=0077  0 2" >> /mnt/etc/fstab
 
 # Set up variables for chroot
 export esp  # Ensure esp is exported for use inside the chroot
