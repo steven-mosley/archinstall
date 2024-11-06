@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.22 - Fixed option parsing in optional features selection
+# Version: v1.0.26 - Fixed processing of selected options from dialog checklist
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.22" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.22).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.26" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.26).
 
-This version fixes the optional features selection parsing to ensure packages are correctly installed." 10 70
+This version fixes the processing of selected options from the dialog checklist to ensure package names are correctly assigned." 10 70
 
 # Clear the screen
 clear
@@ -59,9 +59,13 @@ if [ -z "$disk" ]; then
 fi
 
 # Detect existing partitions
-existing_partitions=$(lsblk -o NAME,TYPE $disk | grep part)
+existing_partitions=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")
 if [ -n "$existing_partitions" ]; then
-  dialog --yesno "Existing partitions detected on $disk. Would you like to destroy the current partitions and recreate them?" 7 60
+  # Display existing partitions
+  dialog --title "Existing Partitions on $disk" --msgbox "The following partitions were found on $disk:\n\n$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")" 20 70
+
+  # Ask user whether to destroy partitions
+  dialog --yesno "Existing partitions detected on $disk.\n\nWould you like to destroy all partitions on $disk and continue with the installation?\n\nSelect 'No' to cancel the installation." 15 70
   if [ $? -eq 0 ]; then
     # Destroy existing partitions
     dialog --infobox "Destroying existing partitions on $disk..." 5 50
@@ -71,7 +75,7 @@ if [ -n "$existing_partitions" ]; then
       exit 1
     fi
   else
-    dialog --msgbox "Installation canceled. Exiting." 5 40
+    dialog --msgbox "Installation canceled by user. Exiting." 5 50
     clear
     exit 1
   fi
@@ -194,7 +198,6 @@ options=(
   "networkmanager" "Install NetworkManager" off
   "zram" "Enable ZRAM" off
 )
-
 selected_options=$(dialog --stdout --separate-output --checklist "Select optional features (use spacebar to select):" 15 60 4 "${options[@]}")
 if [ -z "$selected_options" ]; then
   dialog --msgbox "No optional features selected." 5 40
@@ -205,9 +208,9 @@ btrfs_pkg=""
 networkmanager_pkg=""
 zram_pkg=""
 
-# Process selected options
-for opt in $selected_options; do
-  case $opt in
+# Process selected options correctly
+echo "$selected_options" | while IFS= read -r opt; do
+  case "$opt" in
     btrfs)
       btrfs_pkg="btrfs-progs"
       ;;
@@ -219,6 +222,11 @@ for opt in $selected_options; do
       ;;
   esac
 done
+
+# Trim any whitespace (just in case)
+btrfs_pkg=$(echo "$btrfs_pkg" | xargs)
+networkmanager_pkg=$(echo "$networkmanager_pkg" | xargs)
+zram_pkg=$(echo "$zram_pkg" | xargs)
 
 # Detect CPU and offer to install microcode
 cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
@@ -323,15 +331,21 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Install base system with enhanced progress feedback
-packages=(base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg)
+# Construct the packages array
+# Initialize the packages array with mandatory packages
+packages=(base linux linux-firmware)
 
-# Remove any empty elements from the packages array
-packages=(${packages[@]})
+# Append optional packages if selected
+[ -n "$microcode_pkg" ] && packages+=("$microcode_pkg")
+[ -n "$btrfs_pkg" ] && packages+=("$btrfs_pkg")
+[ -n "$zram_pkg" ] && packages+=("$zram_pkg")
+[ -n "$networkmanager_pkg" ] && packages+=("$networkmanager_pkg")
+
+# Install base system with enhanced progress feedback
 
 # Step 1: Updating package databases
 dialog --infobox "Updating package databases..." 5 50
-pacman -Sy --noconfirm > /dev/null 2>&1
+pacman -Syy --noconfirm > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to update package databases. Exiting." 5 40
   exit 1
@@ -339,7 +353,7 @@ fi
 
 # Step 2: Downloading packages
 dialog --title "Downloading Packages" --gauge "Downloading packages...\nThis may take a while." 10 70 0 < <(
-  total_packages=$(pacman -Sp --needed --noconfirm "${packages[@]}" | wc -l)
+  total_packages=$(pacman -Sp --needed --noconfirm "${packages[@]}" 2>/dev/null | wc -l)
   pacman -Sw --noconfirm --needed "${packages[@]}" > /tmp/pacman_download.log 2>&1 &
   pid=$!
   downloaded_packages=0
@@ -359,7 +373,7 @@ fi
 
 # Step 3: Installing base system
 dialog --title "Installing Base System" --gauge "Installing base system...\nThis may take a while." 10 70 0 < <(
-  total_packages=$(pacman -Qq --cachedir /var/cache/pacman/pkg "${packages[@]}" | wc -l)
+  total_packages=$(pacman -Qq --cachedir /var/cache/pacman/pkg "${packages[@]}" 2>/dev/null | wc -l)
   pacstrap /mnt "${packages[@]}" > /tmp/pacman_install.log 2>&1 &
   pid=$!
   installed_packages=0
