@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.19 - Enhanced user interface with dialog boxes and progress bars
+# Version: v1.0.20 - Enhanced progress feedback during base system installation
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.19" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.19).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.20" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.20).
 
-This version enhances the user interface by hiding command outputs and displaying dialog boxes with progress indicators during operations." 10 70
+This version provides improved progress feedback during the base system installation by tracking actual package installation progress." 10 70
 
 # Clear the screen
 clear
@@ -315,28 +315,39 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Install base system with a simulated progress bar
-dialog --title "Installing Base System" --gauge "Installing base system...\nThis may take a while." 10 70 0 < <(
-  pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg > /dev/null 2>&1 &
-  pid=$!
-  while kill -0 $pid 2> /dev/null; do
-    sleep 2
-    echo "XXX"
-    echo "50"
-    echo "Installing base system... Please wait."
-    echo "XXX"
-  done
-  wait $pid
-  echo "XXX"
-  echo "100"
-  echo "Base system installation complete."
-  echo "XXX"
-)
+# Install base system with dynamic progress bar
+{
+  # Get the list of packages to be installed
+  packages=(base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg)
+  total_packages=$(pacman -Sp --needed --noconfirm "${packages[@]}" | wc -l)
+  
+  # Create a FIFO (named pipe) for capturing output
+  tmp_fifo=$(mktemp -u)
+  mkfifo "$tmp_fifo"
 
-if [ $? -ne 0 ]; then
+  # Start pacstrap in the background
+  stdbuf -oL pacstrap /mnt "${packages[@]}" > "$tmp_fifo" 2>&1 &
+
+  # Read the output from the FIFO
+  (
+    while read -r line; do
+      # Look for lines that match the package installation pattern
+      if [[ "$line" =~ ^\(\ *([0-9]+)/([0-9]+)\ \) ]]; then
+        current=${BASH_REMATCH[1]}
+        total=${BASH_REMATCH[2]}
+        percent=$(( 100 * current / total ))
+        echo "$percent"
+      fi
+    done < "$tmp_fifo"
+  ) | dialog --gauge "Installing base system...\nThis may take a while." 10 70 0
+
+  # Clean up the FIFO
+  rm "$tmp_fifo"
+
+} || {
   dialog --msgbox "Failed to install base system. Exiting." 5 40
   exit 1
-fi
+}
 
 # Generate fstab
 dialog --infobox "Generating fstab..." 5 50
