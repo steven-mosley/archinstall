@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.12 - Fixes issue with EFI partition not being mounted inside chroot
+# Version: v1.0.13 - Mounts EFI partition outside chroot to resolve mounting issues
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.12" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.12).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.13" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.13).
 
 This version includes all the features and fixes we've discussed, including proper chroot handling and EFI partition mounting." 10 70
 
@@ -312,11 +312,19 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
   exit 1
 fi
-mkdir -p /mnt/{boot,home,var/cache/pacman/pkg,var/log,.snapshots}
+mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
 mount -o $mount_options,subvol=@home $root_partition /mnt/home
 mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
 mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
 mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
+
+# **Mount EFI partition outside chroot**
+echo "[DEBUG] Mounting EFI partition $esp"
+mount "$esp" /mnt/boot/efi
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
+  exit 1
+fi
 
 # Install base system
 echo "[DEBUG] Installing base system"
@@ -413,11 +421,6 @@ if [ "$create_user" == "yes" ]; then
   fi
 fi
 
-# Mount the EFI partition inside the chroot
-echo "[DEBUG] Mounting EFI partition inside chroot"
-mkdir -p /boot/efi
-mount "$esp" /boot/efi
-
 # Install rEFInd bootloader with Btrfs support and tweaks
 echo "[DEBUG] Installing rEFInd bootloader"
 pacman -Sy --noconfirm refind
@@ -453,10 +456,6 @@ EOF
 # Copy refind_linux.conf to rEFInd directory
 echo "[DEBUG] Copying refind_linux.conf to rEFInd directory"
 cp /boot/refind_linux.conf /boot/efi/EFI/refind/
-
-# Unmount the EFI partition after installation
-echo "[DEBUG] Unmounting EFI partition inside chroot"
-umount /boot/efi
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
