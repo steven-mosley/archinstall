@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.30 - Display existing partitions in disk selection menu
+# Version: v1.0.32 - Fixed progress bar issues and improved disk selection flow
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -18,9 +18,9 @@ if ! command -v sgdisk &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.30" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.30).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.32" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.32).
 
-This version displays existing partitions in the disk selection menu for better clarity." 10 70
+This version fixes progress bar issues and improves the disk selection and partitioning flow." 10 70
 
 # Clear the screen
 clear
@@ -73,7 +73,7 @@ while read -r disk_line; do
   disk="/dev/$disk_name"
 
   # Get partitions for this disk
-  partitions=$(lsblk -ln -o NAME,SIZE -x NAME "$disk" | grep -E "^$disk_name[[:alpha:]]+" | awk '{printf "    └─%s (%s GiB)\n", $1, $2}')
+  partitions=$(lsblk -ln -o NAME,SIZE -x NAME "$disk" | grep -E "^$disk_name[[:alnum:]]+" | awk '{printf "    └─%s (%s GiB)\n", $1, $2}')
 
   # If no partitions, show total free space
   if [ -z "$partitions" ]; then
@@ -97,23 +97,54 @@ if [ -z "$disk" ]; then
   exit 1
 fi
 
-# Show selected disk details
-disk_summary=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk")
-dialog --title "Selected Disk: $disk" --msgbox "You have selected the following disk:
+# Show existing partitions if any
+existing_partitions=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE "$disk" | grep -E "^$(basename $disk)[[:alnum:]]")
+if [ -n "$existing_partitions" ]; then
+  dialog --title "Existing Partitions on $disk" --yesno "The following partitions exist on $disk:
 
-$disk_summary
+$existing_partitions
 
-All data on this disk will be erased.
+Do you want to continue and reformat the disk?" 20 70
+  if [ $? -ne 0 ]; then
+    dialog --msgbox "Installation canceled by user. Exiting." 5 40
+    clear
+    exit 1
+  fi
+else
+  dialog --title "Disk $disk" --yesno "No existing partitions were found on $disk.
 
-Do you want to continue?" 20 70
+Do you want to continue and format the disk?" 10 70
+  if [ $? -ne 0 ]; then
+    dialog --msgbox "Installation canceled by user. Exiting." 5 40
+    clear
+    exit 1
+  fi
+fi
+
+# Show the proposed partition table
+proposed_partitions=$(cat <<EOF
+$disk (Size: $(lsblk -dn -o SIZE "$disk"))
+
+  Partition 1: EFI System Partition (300 MiB)
+  Partition 2: Linux Filesystem (Rest of the disk)
+EOF
+)
+
+dialog --title "Proposed Partition Scheme for $disk" --yesno "The disk will be partitioned as follows:
+
+$proposed_partitions
+
+All data on the disk will be erased.
+
+Do you want to proceed?" 20 70
 if [ $? -ne 0 ]; then
   dialog --msgbox "Installation canceled by user. Exiting." 5 40
   clear
   exit 1
 fi
 
-# Confirm selected disk
-dialog --yesno "Are you sure you want to erase all data on $disk and proceed with the installation?" 7 60
+# Confirm final decision
+dialog --yesno "Are you absolutely sure you want to erase all data on $disk and proceed with the installation?" 7 60
 if [ $? -ne 0 ]; then
   dialog --msgbox "Installation canceled by user. Exiting." 5 40
   clear
@@ -130,6 +161,20 @@ fi
 # Wait for the system to recognize the partition changes
 sleep 2
 
+# Create new partitions
+dialog --infobox "Creating new partition table on $disk..." 5 50
+if ! sgdisk -n 1:0:+300M -t 1:ef00 "$disk" > /tmp/sgdisk_new_output 2>&1; then
+  dialog --msgbox "Failed to create EFI partition on $disk. Error: $(cat /tmp/sgdisk_new_output)" 10 60
+  exit 1
+fi
+if ! sgdisk -n 2:0:0 -t 2:8300 "$disk" >> /tmp/sgdisk_new_output 2>&1; then
+  dialog --msgbox "Failed to create root partition on $disk. Error: $(cat /tmp/sgdisk_new_output)" 10 60
+  exit 1
+fi
+
+# Wait for the system to recognize the partition changes
+sleep 2
+
 # Get partition names (after partitions are created)
 if [[ "$(basename $disk)" == nvme* ]] || [[ "$(basename $disk)" == mmcblk* ]]; then
   esp="${disk}p1"
@@ -138,6 +183,9 @@ else
   esp="${disk}1"
   root_partition="${disk}2"
 fi
+
+# Clean up temporary files
+rm -f /tmp/sgdisk_zap_output /tmp/sgdisk_new_output
 
 # Prompt for hostname
 hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
@@ -302,29 +350,6 @@ fi
 
 # All dialogs are now completed before installation starts
 
-# Create partitions
-dialog --infobox "Creating partitions on $disk..." 5 50
-# Partition 1: EFI System Partition
-if ! sgdisk -n 1:0:+300M -t 1:ef00 "$disk" > /tmp/sgdisk_efi_output 2>&1; then
-  dialog --msgbox "Failed to create EFI partition on $disk. Error: $(cat /tmp/sgdisk_efi_output)" 10 60
-  exit 1
-fi
-
-# Wait for the system to recognize the partition changes
-sleep 2
-
-# Partition 2: Root partition
-if ! sgdisk -n 2:0:0 -t 2:8300 "$disk" > /tmp/sgdisk_root_output 2>&1; then
-  dialog --msgbox "Failed to create root partition on $disk. Error: $(cat /tmp/sgdisk_root_output)" 10 60
-  exit 1
-fi
-
-# Wait for the system to recognize the partition changes
-sleep 2
-
-# Clean up temporary files
-rm -f /tmp/sgdisk_zap_output /tmp/sgdisk_efi_output /tmp/sgdisk_root_output
-
 # Format partitions
 dialog --infobox "Formatting partitions..." 5 50
 mkfs.vfat -F32 -n EFI "$esp" > /dev/null 2>&1
@@ -393,60 +418,13 @@ packages=(base linux linux-firmware)
 [ -n "$zram_pkg" ] && packages+=("$zram_pkg")
 [ -n "$networkmanager_pkg" ] && packages+=("$networkmanager_pkg")
 
-# Install base system with enhanced progress feedback
-
-# Step 1: Updating package databases
-dialog --infobox "Updating package databases..." 5 50
-pacman -Syy --noconfirm > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to update package databases. Exiting." 5 40
+# Install base system
+dialog --infobox "Installing base system...
+This may take a while." 5 50
+if ! pacstrap /mnt "${packages[@]}" > /tmp/pacstrap_install.log 2>&1; then
+  dialog --msgbox "Failed to install base system. Check /tmp/pacstrap_install.log for details." 7 60
   exit 1
 fi
-
-# Step 2: Downloading packages
-dialog --title "Downloading Packages" --gauge "Downloading packages...
-This may take a while." 10 70 0 < <(
-  total_packages=$(pacman -Sp --needed --noconfirm "${packages[@]}" 2>/dev/null | wc -l)
-  pacman -Sw --noconfirm --needed "${packages[@]}" > /tmp/pacman_download.log 2>&1 &
-  pid=$!
-  downloaded_packages=0
-  while kill -0 $pid 2> /dev/null; do
-    sleep 1
-    downloaded_packages=$(grep -c "downloading" /tmp/pacman_download.log)
-    percent=$(( (downloaded_packages * 100) / total_packages ))
-    echo $percent
-  done
-  wait $pid
-  echo 100
-)
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to download packages. Exiting." 5 40
-  exit 1
-fi
-
-# Step 3: Installing base system
-dialog --title "Installing Base System" --gauge "Installing base system...
-This may take a while." 10 70 0 < <(
-  total_packages=$(pacman -Qq --cachedir /var/cache/pacman/pkg "${packages[@]}" 2>/dev/null | wc -l)
-  pacstrap /mnt "${packages[@]}" > /tmp/pacman_install.log 2>&1 &
-  pid=$!
-  installed_packages=0
-  while kill -0 $pid 2> /dev/null; do
-    sleep 1
-    installed_packages=$(grep -c "installing" /tmp/pacman_install.log)
-    percent=$(( (installed_packages * 100) / total_packages ))
-    echo $percent
-  done
-  wait $pid
-  echo 100
-)
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to install base system. Exiting." 5 40
-  exit 1
-fi
-
-# Clean up temporary logs
-rm /tmp/pacman_download.log /tmp/pacman_install.log
 
 # Generate fstab
 dialog --infobox "Generating fstab..." 5 50
