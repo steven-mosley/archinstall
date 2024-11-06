@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
-# Version: v1.0.1 - Updated for bug fixes and improvements
-# WARNING: This script will erase the selected disk or shrink an existing Windows partition.
+# Version: v1.0.3 - Updated with bug fixes and improvements
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -16,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.2" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.2).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.3" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.3).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
 
@@ -60,7 +59,7 @@ if [ -z "$disk" ]; then
   exit 1
 fi
 
-# Detect existing Windows partitions or other partitions
+# Detect existing partitions
 existing_partitions=$(lsblk -o NAME,TYPE $disk | grep part)
 if [ -n "$existing_partitions" ]; then
   dialog --yesno "Existing partitions detected on $disk. Would you like to destroy the current partitions and recreate them?" 7 60
@@ -200,23 +199,40 @@ if [ -z "$hostname" ]; then
   hostname="archlinux"
 fi
 
-# Prompt for timezone
+# Prompt for timezone using dialog
 echo "[DEBUG] Prompting for timezone"
-available_timezones=$(find /usr/share/zoneinfo/ -type f | sed 's#/usr/share/zoneinfo/##')
-timezone=$(dialog --stdout --title "Select Timezone" --menu "Select your timezone:" 20 60 15 $(echo "$available_timezones" | nl -w2 -s" "))
-if [ -z "$timezone" ]; then
-  dialog --msgbox "No timezone selected. Using 'UTC' as default." 6 50
+available_regions=$(ls /usr/share/zoneinfo | grep -v 'posix\|right\|Etc\|SystemV\|Factory')
+region=$(dialog --stdout --title "Select Region" --menu "Select your region:" 20 60 15 $(echo "$available_regions" | awk '{print $1, $1}'))
+if [ -z "$region" ]; then
+  dialog --msgbox "No region selected. Using 'UTC' as default." 6 50
   timezone="UTC"
+else
+  available_cities=$(ls /usr/share/zoneinfo/$region)
+  city=$(dialog --stdout --title "Select City" --menu "Select your city:" 20 60 15 $(echo "$available_cities" | awk '{print $1, $1}'))
+  if [ -z "$city" ]; then
+    dialog --msgbox "No city selected. Using 'UTC' as default." 6 50
+    timezone="UTC"
+  else
+    timezone="$region/$city"
+  fi
 fi
 
-# Prompt for locale
+# Prompt for locale selection
 echo "[DEBUG] Prompting for locale selection"
-available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | awk '{print NR, $1}')
-selected_number=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 $available_locales)
-selected_locale=$(echo "$available_locales" | awk -v num=$selected_number '$1 == num {print $2}')
-if [ -z "$selected_locale" ]; then
+available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | sort)
+locale_options=()
+index=1
+while IFS= read -r line; do
+  locale_options+=("$index" "$line")
+  index=$((index + 1))
+done <<< "$available_locales"
+
+selected_number=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 "${locale_options[@]}")
+if [ -z "$selected_number" ]; then
   dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
   selected_locale="en_US.UTF-8"
+else
+  selected_locale=$(echo "$available_locales" | sed -n "${selected_number}p")
 fi
 
 # Offer to install btrfs-progs
@@ -249,7 +265,7 @@ fi
 # Install base system
 echo "[DEBUG] Installing base system"
 dialog --infobox "Installing base system..." 5 40
-pacstrap /mnt base linux linux-firmware $microcode_pkg "$btrfs_pkg" "$zram_pkg" "$networkmanager_pkg"
+pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to install base system. Exiting." 5 40
   exit 1
@@ -263,12 +279,19 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+# Set up variables for chroot
+export microcode_img
+export hostname
+export timezone
+export selected_locale
+export zram_pkg
+
 # Chroot into the new system
 echo "[DEBUG] Entering chroot to configure the new system"
 arch-chroot /mnt /bin/bash <<EOF
 # Set the timezone
 echo "[DEBUG] Setting timezone to $timezone"
-ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
+ln -sf "/usr/share/zoneinfo/$timezone" /etc/localtime
 hwclock --systohc
 
 # Set the hostname
@@ -290,19 +313,20 @@ locale-gen
 echo "LANG=$selected_locale" > /etc/locale.conf
 
 # Configure ZRAM if enabled
-echo "[DEBUG] Configuring ZRAM if enabled"
 if [ -n "$zram_pkg" ]; then
+  echo "[DEBUG] Configuring ZRAM"
   cat <<EOM > /etc/systemd/zram-generator.conf
 [zram0]
 zram-size = ram / 2
 compression-algorithm = zstd
 EOM
 fi
-EOF
 
-# Set root password
-echo "[DEBUG] Prompting for root password"
-arch-chroot /mnt passwd
+# Set the root password
+echo "[DEBUG] Setting root password"
+passwd
+
+EOF
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
@@ -334,15 +358,15 @@ echo "[DEBUG] Creating refind_linux.conf"
 partuuid=$(blkid -s PARTUUID -o value $root_partition)
 initrd_line=""
 if [ -n "$microcode_img" ]; then
-  initrd_line="initrd=@\boot\$microcode_img initrd=@\boot\initramfs-%v.img"
+  initrd_line="initrd=\\@\\boot\\$microcode_img initrd=\\@\\boot\\initramfs-%v.img"
 else
-  initrd_line="initrd=@\boot\initramfs-%v.img"
+  initrd_line="initrd=\\@\\boot\\initramfs-%v.img"
 fi
 
 cat << EOF > /mnt/boot/refind_linux.conf
 "Boot with standard options"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line"
-"Boot using fallback initramfs"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\boot\initramfs-%v-fallback.img"
-"Boot to terminal"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=@\boot\initramfs-%v.img systemd.unit=multi-user.target"
+"Boot using fallback initramfs"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=\\@\\boot\\initramfs-%v-fallback.img"
+"Boot to terminal"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=\\@\\boot\\initramfs-%v.img systemd.unit=multi-user.target"
 EOF
 
 # Copy refind_linux.conf to rEFInd directory
@@ -404,8 +428,20 @@ if [ $? -eq 0 ]; then
   umount -R /mnt
   reboot
 else
-  # Drop to the terminal
+  # Clear the screen
   clear
-  echo "[DEBUG] Dropping to chroot environment for additional configuration"
+  # Bind mount necessary filesystems for chroot
+  echo "[DEBUG] Preparing chroot environment"
+  for dir in /dev /dev/pts /proc /sys /run; do
+    mount --bind $dir /mnt$dir
+  done
+  # Drop into the chroot environment
+  echo "[DEBUG] Dropping into chroot environment for additional configuration"
   arch-chroot /mnt /bin/bash
+  # After exiting chroot, unmount filesystems
+  echo "[DEBUG] Cleaning up chroot environment"
+  for dir in /run /sys /proc /dev/pts /dev; do
+    umount /mnt$dir
+  done
+  umount -R /mnt
 fi
