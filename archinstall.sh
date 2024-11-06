@@ -482,11 +482,22 @@ if [ $? -eq 0 ]; then
 else
   # Clear the screen
   clear
+  # Bind mount necessary filesystems for chroot
+  echo "[DEBUG] Preparing chroot environment"
+  for dir in dev proc sys run; do
+    mount --rbind "/$dir" "/mnt/$dir"
+  done
+
   # Drop into the chroot environment
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   echo "Type 'exit' to leave the chroot environment and complete the installation."
-  mount --rbind /dev /mnt/dev
-  mount --rbind /proc /mnt/proc
-  mount --rbind /sys /mnt/sys
-  exec arch-chroot /mnt /bin/bash
+  sleep 2
+  arch-chroot /mnt /bin/bash
+
+  # After exiting chroot, unmount filesystems
+  echo "[DEBUG] Cleaning up chroot environment"
+  for dir in dev proc sys run; do
+    umount -l "/mnt/$dir"
+  done
+  umount -R /mnt
 fi
