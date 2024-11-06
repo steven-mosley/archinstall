@@ -482,15 +482,8 @@ if [ $? -eq 0 ]; then
 else
   # Clear the screen
   clear
-  # Bind mount necessary filesystems for chroot
-  echo "[DEBUG] Preparing chroot environment"
-  for dir in /dev /proc /sys /run; do
-    mount --bind "$dir" "/mnt$dir"
-  done
-
   # Drop into the chroot environment
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   echo "Type 'exit' to leave the chroot environment and complete the installation."
-  sleep 2
   arch-chroot /mnt /bin/bash
 fi
