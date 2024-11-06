@@ -492,7 +492,9 @@ else
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
   echo "Type 'exit' to leave the chroot environment and complete the installation."
   sleep 2
-  arch-chroot /mnt /bin/bash
+
+  # Redirect stdin and stdout to the terminal
+  arch-chroot /mnt /bin/bash < /dev/tty > /dev/tty 2>&1
 
   # After exiting chroot, unmount filesystems
   echo "[DEBUG] Cleaning up chroot environment"
