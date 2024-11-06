@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.20 - Enhanced progress feedback during base system installation
+# Version: v1.0.21 - Enhanced progress feedback and combined optional features selection
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.20" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.20).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.21" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.21).
 
-This version provides improved progress feedback during the base system installation by tracking actual package installation progress." 10 70
+This version provides enhanced progress feedback during the base system installation and combines optional feature selections into a single dialog." 10 70
 
 # Clear the screen
 clear
@@ -188,29 +188,37 @@ else
   create_user="no"
 fi
 
-# Offer to install btrfs-progs
-dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
-if [ $? -eq 0 ]; then
-  btrfs_pkg="btrfs-progs"
-else
-  btrfs_pkg=""
+# Combine optional features into a single selection dialog
+options=(
+  1 "Install btrfs-progs" off
+  2 "Install NetworkManager" off
+  3 "Enable ZRAM" off
+)
+
+selected_options=$(dialog --stdout --checklist "Select optional features:" 15 60 4 "${options[@]}")
+if [ -z "$selected_options" ]; then
+  dialog --msgbox "No optional features selected." 5 40
 fi
 
-# Offer to install NetworkManager
-dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
-if [ $? -eq 0 ]; then
-  networkmanager_pkg="networkmanager"
-else
-  networkmanager_pkg=""
-fi
+# Initialize variables
+btrfs_pkg=""
+networkmanager_pkg=""
+zram_pkg=""
 
-# Offer to enable ZRAM
-dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
-if [ $? -eq 0 ]; then
-  zram_pkg="zram-generator"
-else
-  zram_pkg=""
-fi
+# Process selected options
+for opt in $selected_options; do
+  case $opt in
+    1)
+      btrfs_pkg="btrfs-progs"
+      ;;
+    2)
+      networkmanager_pkg="networkmanager"
+      ;;
+    3)
+      zram_pkg="zram-generator"
+      ;;
+  esac
+done
 
 # Detect CPU and offer to install microcode
 cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
@@ -315,39 +323,59 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Install base system with dynamic progress bar
-{
-  # Get the list of packages to be installed
-  packages=(base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg)
+# Install base system with enhanced progress feedback
+packages=(base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg)
+
+# Step 1: Updating package databases
+dialog --infobox "Updating package databases..." 5 50
+pacman -Sy --noconfirm > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to update package databases. Exiting." 5 40
+  exit 1
+fi
+
+# Step 2: Downloading packages
+dialog --title "Downloading Packages" --gauge "Downloading packages...\nThis may take a while." 10 70 0 < <(
   total_packages=$(pacman -Sp --needed --noconfirm "${packages[@]}" | wc -l)
-  
-  # Create a FIFO (named pipe) for capturing output
-  tmp_fifo=$(mktemp -u)
-  mkfifo "$tmp_fifo"
+  pacman -Sw --noconfirm --needed "${packages[@]}" > /tmp/pacman_download.log 2>&1 &
+  pid=$!
+  downloaded_packages=0
+  while kill -0 $pid 2> /dev/null; do
+    sleep 1
+    downloaded_packages=$(grep -c "downloading" /tmp/pacman_download.log)
+    percent=$(( (downloaded_packages * 100) / total_packages ))
+    echo $percent
+  done
+  wait $pid
+  echo 100
+)
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to download packages. Exiting." 5 40
+  exit 1
+fi
 
-  # Start pacstrap in the background
-  stdbuf -oL pacstrap /mnt "${packages[@]}" > "$tmp_fifo" 2>&1 &
-
-  # Read the output from the FIFO
-  (
-    while read -r line; do
-      # Look for lines that match the package installation pattern
-      if [[ "$line" =~ ^\(\ *([0-9]+)/([0-9]+)\ \) ]]; then
-        current=${BASH_REMATCH[1]}
-        total=${BASH_REMATCH[2]}
-        percent=$(( 100 * current / total ))
-        echo "$percent"
-      fi
-    done < "$tmp_fifo"
-  ) | dialog --gauge "Installing base system...\nThis may take a while." 10 70 0
-
-  # Clean up the FIFO
-  rm "$tmp_fifo"
-
-} || {
+# Step 3: Installing base system
+dialog --title "Installing Base System" --gauge "Installing base system...\nThis may take a while." 10 70 0 < <(
+  total_packages=$(pacman -Qq --cachedir /var/cache/pacman/pkg "${packages[@]}" | wc -l)
+  pacstrap /mnt "${packages[@]}" > /tmp/pacman_install.log 2>&1 &
+  pid=$!
+  installed_packages=0
+  while kill -0 $pid 2> /dev/null; do
+    sleep 1
+    installed_packages=$(grep -c "installing" /tmp/pacman_install.log)
+    percent=$(( (installed_packages * 100) / total_packages ))
+    echo $percent
+  done
+  wait $pid
+  echo 100
+)
+if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to install base system. Exiting." 5 40
   exit 1
-}
+fi
+
+# Clean up temporary logs
+rm /tmp/pacman_download.log /tmp/pacman_install.log
 
 # Generate fstab
 dialog --infobox "Generating fstab..." 5 50
