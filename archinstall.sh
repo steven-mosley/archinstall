@@ -1,23 +1,23 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.18 - Mounts EFI partition at /efi and uses --no-mount option with refind-install
+# Version: v1.0.19 - Enhanced user interface with dialog boxes and progress bars
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
-  echo "Please run as root."
+  dialog --msgbox "Please run this script as root." 5 40
   exit 1
 fi
 
 # Install necessary packages if not already installed
 if ! command -v dialog &> /dev/null; then
-  pacman -Sy --noconfirm dialog
+  pacman -Sy --noconfirm dialog > /dev/null 2>&1
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.18" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.18).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.19" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.19).
 
-This version mounts the EFI partition at /efi and uses the --no-mount option with refind-install to prevent the EFI partition from being mounted multiple times." 10 70
+This version enhances the user interface by hiding command outputs and displaying dialog boxes with progress indicators during operations." 10 70
 
 # Clear the screen
 clear
@@ -51,7 +51,6 @@ if [ $? -ne 0 ]; then
 fi
 
 # Disk selection
-echo "[DEBUG] Prompting for disk selection"
 disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE,TYPE | awk '$3=="disk" {print "/dev/" $1 " " $2}'))
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
@@ -64,8 +63,9 @@ existing_partitions=$(lsblk -o NAME,TYPE $disk | grep part)
 if [ -n "$existing_partitions" ]; then
   dialog --yesno "Existing partitions detected on $disk. Would you like to destroy the current partitions and recreate them?" 7 60
   if [ $? -eq 0 ]; then
-    echo "[DEBUG] Destroying existing partitions on $disk"
-    sgdisk --zap-all $disk
+    # Destroy existing partitions
+    dialog --infobox "Destroying existing partitions on $disk..." 5 50
+    sgdisk --zap-all $disk > /dev/null 2>&1
     if [ $? -ne 0 ]; then
       dialog --msgbox "Failed to destroy partitions on $disk. Exiting." 5 40
       exit 1
@@ -87,7 +87,6 @@ else
 fi
 
 # Prompt for hostname
-echo "[DEBUG] Prompting for hostname"
 hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
 if [ -z "$hostname" ]; then
   dialog --msgbox "No hostname entered. Using default 'archlinux'." 6 50
@@ -95,7 +94,6 @@ if [ -z "$hostname" ]; then
 fi
 
 # Prompt for timezone using dialog
-echo "[DEBUG] Prompting for timezone"
 available_regions=$(ls /usr/share/zoneinfo | grep -v 'posix\|right\|Etc\|SystemV\|Factory')
 region=$(dialog --stdout --title "Select Region" --menu "Select your region:" 20 60 15 $(echo "$available_regions" | awk '{print $1, $1}'))
 if [ -z "$region" ]; then
@@ -113,7 +111,6 @@ else
 fi
 
 # Prompt for locale selection
-echo "[DEBUG] Prompting for locale selection"
 available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | sort)
 locale_options=()
 index=1
@@ -131,7 +128,6 @@ else
 fi
 
 # Prompt for root password with validation
-echo "[DEBUG] Prompting for root password"
 while true; do
   root_password=$(dialog --stdout --insecure --passwordbox "Enter a root password (minimum 6 characters):" 10 50)
   if [ -z "$root_password" ]; then
@@ -164,7 +160,6 @@ if [ $? -eq 0 ]; then
   done
 
   # Prompt for user password with validation
-  echo "[DEBUG] Prompting for user password"
   while true; do
     user_password=$(dialog --stdout --insecure --passwordbox "Enter a password for $username (minimum 6 characters):" 10 50)
     if [ -z "$user_password" ]; then
@@ -194,7 +189,6 @@ else
 fi
 
 # Offer to install btrfs-progs
-echo "[DEBUG] Prompting for Btrfs tools installation"
 dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
 if [ $? -eq 0 ]; then
   btrfs_pkg="btrfs-progs"
@@ -203,7 +197,6 @@ else
 fi
 
 # Offer to install NetworkManager
-echo "[DEBUG] Prompting for NetworkManager installation"
 dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
 if [ $? -eq 0 ]; then
   networkmanager_pkg="networkmanager"
@@ -212,7 +205,6 @@ else
 fi
 
 # Offer to enable ZRAM
-echo "[DEBUG] Prompting for ZRAM enablement"
 dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
 if [ $? -eq 0 ]; then
   zram_pkg="zram-generator"
@@ -221,7 +213,6 @@ else
 fi
 
 # Detect CPU and offer to install microcode
-echo "[DEBUG] Detecting CPU vendor"
 cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
 microcode_pkg=""
 microcode_img=""
@@ -245,43 +236,42 @@ fi
 # All dialogs are now completed before installation starts
 
 # Create partitions
-echo "[DEBUG] Creating partitions on $disk"
+dialog --infobox "Creating partitions on $disk..." 5 50
 # Partition 1: EFI System Partition
-sgdisk -n 1:0:+300M -t 1:ef00 $disk
+sgdisk -n 1:0:+300M -t 1:ef00 $disk > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create EFI partition on $disk. Exiting." 5 40
   exit 1
 fi
 
 # Wait for the system to recognize the partition changes
-sleep 5
+sleep 2
 
 # Partition 2: Root partition
-sgdisk -n 2:0:0 -t 2:8300 $disk
+sgdisk -n 2:0:0 -t 2:8300 $disk > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create root partition on $disk. Exiting." 5 40
   exit 1
 fi
 
 # Wait for the system to recognize the partition changes
-sleep 5
+sleep 2
 
 # Format partitions
-echo "[DEBUG] Formatting partitions"
-dialog --infobox "Formatting partitions..." 5 40
-mkfs.vfat -F32 -n EFI $esp
+dialog --infobox "Formatting partitions..." 5 50
+mkfs.vfat -F32 -n EFI $esp > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to format EFI partition. Exiting." 5 40
   exit 1
 fi
-mkfs.btrfs -f -L Arch $root_partition
+mkfs.btrfs -f -L Arch $root_partition > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to format root partition. Exiting." 5 40
   exit 1
 fi
 
 # Mount root partition
-echo "[DEBUG] Mounting root partition $root_partition"
+dialog --infobox "Mounting root partition..." 5 50
 mount $root_partition /mnt
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root partition. Exiting." 5 40
@@ -289,24 +279,23 @@ if [ $? -ne 0 ]; then
 fi
 
 # Create Btrfs subvolumes
-echo "[DEBUG] Creating Btrfs subvolumes"
-btrfs su cr /mnt/@
+dialog --infobox "Creating Btrfs subvolumes..." 5 50
+btrfs su cr /mnt/@ > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to create @ subvolume. Exiting." 5 40
   exit 1
 fi
-btrfs su cr /mnt/@home
-btrfs su cr /mnt/@pkg
-btrfs su cr /mnt/@log
-btrfs su cr /mnt/@snapshots
+btrfs su cr /mnt/@home > /dev/null 2>&1
+btrfs su cr /mnt/@pkg > /dev/null 2>&1
+btrfs su cr /mnt/@log > /dev/null 2>&1
+btrfs su cr /mnt/@snapshots > /dev/null 2>&1
 
 # Unmount root partition
-echo "[DEBUG] Unmounting root partition"
 umount /mnt
 
 # Mount subvolumes with options
 mount_options="noatime,compress=zstd,discard=async,space_cache=v2"
-echo "[DEBUG] Mounting Btrfs subvolumes"
+dialog --infobox "Mounting Btrfs subvolumes..." 5 50
 mount -o $mount_options,subvol=@ $root_partition /mnt
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
@@ -318,25 +307,39 @@ mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
 mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
 mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
 
-# **Mount EFI partition at /mnt/efi before chrooting**
-echo "[DEBUG] Mounting EFI partition $esp at /mnt/efi"
+# Mount EFI partition at /mnt/efi before chrooting
+dialog --infobox "Mounting EFI partition at /mnt/efi..." 5 50
 mount "$esp" /mnt/efi
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
   exit 1
 fi
 
-# Install base system
-echo "[DEBUG] Installing base system"
-dialog --infobox "Installing base system..." 5 40
-pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg
+# Install base system with a simulated progress bar
+dialog --title "Installing Base System" --gauge "Installing base system...\nThis may take a while." 10 70 0 < <(
+  pacstrap /mnt base linux linux-firmware $microcode_pkg $btrfs_pkg $zram_pkg $networkmanager_pkg > /dev/null 2>&1 &
+  pid=$!
+  while kill -0 $pid 2> /dev/null; do
+    sleep 2
+    echo "XXX"
+    echo "50"
+    echo "Installing base system... Please wait."
+    echo "XXX"
+  done
+  wait $pid
+  echo "XXX"
+  echo "100"
+  echo "Base system installation complete."
+  echo "XXX"
+)
+
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to install base system. Exiting." 5 40
   exit 1
 fi
 
 # Generate fstab
-echo "[DEBUG] Generating fstab"
+dialog --infobox "Generating fstab..." 5 50
 genfstab -U /mnt >> /mnt/etc/fstab
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to generate fstab. Exiting." 5 40
@@ -357,26 +360,24 @@ export username
 export user_password
 export grant_sudo
 
-# **Mount necessary filesystems before chrooting**
-echo "[DEBUG] Mounting necessary filesystems for chroot"
+# Mount necessary filesystems before chrooting
 for dir in dev proc sys run; do
   mount --rbind "/$dir" "/mnt/$dir"
 done
 
 # Chroot into the new system for configurations
-echo "[DEBUG] Entering chroot to configure the new system"
 arch-chroot /mnt /bin/bash <<EOF_VAR
+# Suppress command outputs inside chroot
+exec > /dev/null 2>&1
+
 # Set the timezone
-echo "[DEBUG] Setting timezone to $timezone"
 ln -sf "/usr/share/zoneinfo/$timezone" /etc/localtime
 hwclock --systohc
 
 # Set the hostname
-echo "[DEBUG] Setting hostname to $hostname"
 echo "$hostname" > /etc/hostname
 
 # Configure /etc/hosts
-echo "[DEBUG] Configuring /etc/hosts"
 cat <<EOL > /etc/hosts
 127.0.0.1   localhost
 ::1         localhost
@@ -384,14 +385,12 @@ cat <<EOL > /etc/hosts
 EOL
 
 # Generate locales
-echo "[DEBUG] Generating locales"
 echo "$selected_locale UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=$selected_locale" > /etc/locale.conf
 
 # Configure ZRAM if enabled
 if [ -n "$zram_pkg" ]; then
-  echo "[DEBUG] Configuring ZRAM"
   cat <<EOM > /etc/systemd/zram-generator.conf
 [zram0]
 zram-size = ram / 2
@@ -400,7 +399,6 @@ EOM
 fi
 
 # Set the root password
-echo "[DEBUG] Setting root password"
 echo "root:$root_password" | chpasswd
 
 # Clear the root password variable for security
@@ -408,23 +406,20 @@ unset root_password
 
 # Create user account if requested
 if [ "$create_user" == "yes" ]; then
-  echo "[DEBUG] Creating user account: $username"
   useradd -m "$username"
   echo "$username:$user_password" | chpasswd
   unset user_password
 
   if [ "$grant_sudo" == "yes" ]; then
-    echo "[DEBUG] Granting sudo privileges to $username"
-    pacman -Sy --noconfirm sudo
+    pacman -Sy --noconfirm sudo > /dev/null 2>&1
     usermod -aG wheel "$username"
     sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
   fi
 fi
 
 # Install rEFInd bootloader with --no-mount option
-echo "[DEBUG] Installing rEFInd bootloader with --no-mount option"
-pacman -Sy --noconfirm refind
-refind-install --yes --no-mount
+pacman -Sy --noconfirm refind > /dev/null 2>&1
+refind-install --yes --no-mount > /dev/null 2>&1
 
 if [ \$? -ne 0 ]; then
   echo "Failed to install rEFInd. Exiting."
@@ -432,14 +427,12 @@ if [ \$? -ne 0 ]; then
 fi
 
 # rEFInd configuration
-echo "[DEBUG] Modifying rEFInd configuration"
 sed -i 's/^#enable_mouse/enable_mouse/' /efi/EFI/refind/refind.conf
 sed -i 's/^#mouse_speed .*/mouse_speed 8/' /efi/EFI/refind/refind.conf
 sed -i 's/^#resolution .*/resolution max/' /efi/EFI/refind/refind.conf
 sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /efi/EFI/refind/refind.conf
 
 # Create refind_linux.conf with the specified options
-echo "[DEBUG] Creating refind_linux.conf"
 partuuid=\$(blkid -s PARTUUID -o value $root_partition)
 initrd_line=""
 if [ -n "$microcode_img" ]; then
@@ -455,25 +448,21 @@ cat << EOF > /boot/refind_linux.conf
 EOF
 
 # Ask if the user wants to use bash or install zsh
-echo "[DEBUG] Prompting for shell selection"
 if [ -f /bin/dialog ]; then
-  pacman -Sy --noconfirm dialog
+  pacman -Sy --noconfirm dialog > /dev/null 2>&1
   dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
   if [ \$? -eq 0 ]; then
-    pacman -Sy --noconfirm zsh
+    pacman -Sy --noconfirm zsh > /dev/null 2>&1
     chsh -s /bin/zsh
     if [ "$create_user" == "yes" ]; then
       chsh -s /bin/zsh "$username"
     fi
   fi
-else
-  echo "Dialog not found. Skipping shell selection."
 fi
 
 EOF_VAR
 
-# **Unmount the filesystems after chrooting**
-echo "[DEBUG] Unmounting filesystems after initial chroot"
+# Unmount the filesystems after chrooting
 for dir in dev proc sys run; do
   umount -l "/mnt/$dir"
 done
@@ -494,13 +483,11 @@ else
   # Clear the screen
   clear
   # Bind mount necessary filesystems for chroot
-  echo "[DEBUG] Preparing chroot environment for interactive session"
   for dir in dev proc sys run; do
     mount --rbind "/$dir" "/mnt/$dir"
   done
 
   # Drop into the chroot environment
-  echo "[DEBUG] Dropping into chroot environment for additional configuration"
   echo "Type 'exit' to leave the chroot environment and complete the installation."
   sleep 2
 
@@ -508,7 +495,6 @@ else
   arch-chroot /mnt /bin/bash < /dev/tty > /dev/tty 2>&1
 
   # After exiting chroot, unmount filesystems
-  echo "[DEBUG] Cleaning up chroot environment after interactive session"
   for dir in dev proc sys run; do
     umount -l "/mnt/$dir"
   done
