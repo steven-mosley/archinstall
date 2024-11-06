@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.28 - Fixed partition creation and existing partitions display
+# Version: v1.0.29 - Fixed disk selection and ensured $disk is properly assigned
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -18,9 +18,9 @@ if ! command -v sgdisk &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.28" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.28).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.29" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.29).
 
-This version fixes issues with partition creation and displays existing partitions before proceeding." 10 70
+This version fixes issues with disk selection and ensures the \$disk variable is properly assigned." 10 70
 
 # Clear the screen
 clear
@@ -65,10 +65,29 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Disk selection
-disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 $(lsblk -dn -o NAME,SIZE | awk '{print "/dev/" $1, "(" $2 ")"}'))
+# Build disk options array
+disk_options=()
+while read -r line; do
+  name=$(echo "$line" | awk '{print $1}')
+  size=$(echo "$line" | awk '{print $2}')
+  disk_options+=("/dev/$name" "${size}GiB")
+done < <(lsblk -dn -o NAME,SIZE | grep -E 'sd|hd|vd|nvme|mmcblk')
+
+# Display disk selection menu
+disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:" 15 60 4 "${disk_options[@]}")
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
+  clear
+  exit 1
+fi
+
+# Confirm selected disk
+dialog --yesno "You have selected $disk for installation.
+All data on this disk will be erased.
+
+Do you want to continue?" 10 60
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Installation canceled by user. Exiting." 5 40
   clear
   exit 1
 fi
@@ -101,8 +120,11 @@ Select 'No' to cancel the installation." 15 70
   fi
 fi
 
+# Wait for the system to recognize the partition changes
+sleep 2
+
 # Get partition names (after partitions are created)
-if [[ "$(basename $disk)" == nvme* ]]; then
+if [[ "$(basename $disk)" == nvme* ]] || [[ "$(basename $disk)" == mmcblk* ]]; then
   esp="${disk}p1"
   root_partition="${disk}p2"
 else
