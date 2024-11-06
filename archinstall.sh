@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.10 - Uses arch-chroot directly for chroot environment
+# Version: v1.0.11 - Corrected script with chroot and EFI partition mounting fixes
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.10" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.10).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.11" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.11).
 
-This version includes all the features and fixes we've discussed, including proper chroot handling." 10 70
+This version includes all the features and fixes we've discussed, including proper chroot handling and EFI partition mounting." 10 70
 
 # Clear the screen
 clear
@@ -43,7 +43,7 @@ timedatectl set-ntp true
 dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linux Minimal Installer.\n\nThis installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
 
 # Ask if the user wants to use the default Btrfs subvolume scheme
-dialog --yesno "The default Btrfs subvolume scheme is as follows:\n\n@ mounted at /mnt\n@home mounted at /mnt/home\n@pkg mounted at /mnt/var/cache/pacman/pkg\n@log mounted at /mnt/var/log\n@snapshots mounted at /mnt/.snapshots\n\nWould you like to use this scheme?" 15 70
+dialog --yesno "The default Btrfs subvolume scheme is as follows:\n\n@ mounted at /\n@home mounted at /home\n@pkg mounted at /var/cache/pacman/pkg\n@log mounted at /var/log\n@snapshots mounted at /.snapshots\n\nWould you like to use this scheme?" 15 70
 if [ $? -ne 0 ]; then
   dialog --msgbox "Installation canceled. Exiting." 5 40
   clear
@@ -269,7 +269,7 @@ sleep 5
 # Format partitions
 echo "[DEBUG] Formatting partitions"
 dialog --infobox "Formatting partitions..." 5 40
-mkfs.vfat -F32 -I $esp
+mkfs.vfat -F32 -n EFI $esp
 if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to format EFI partition. Exiting." 5 40
   exit 1
@@ -312,19 +312,11 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
   exit 1
 fi
-mkdir -p /mnt/{boot/efi,home,var/cache/pacman/pkg,var/log,.snapshots}
+mkdir -p /mnt/{boot,home,var/cache/pacman/pkg,var/log,.snapshots}
 mount -o $mount_options,subvol=@home $root_partition /mnt/home
 mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
 mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
 mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
-
-# Mount EFI partition
-echo "[DEBUG] Mounting EFI partition $esp"
-mount $esp /mnt/boot/efi
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
-  exit 1
-fi
 
 # Install base system
 echo "[DEBUG] Installing base system"
@@ -344,6 +336,8 @@ if [ $? -ne 0 ]; then
 fi
 
 # Set up variables for chroot
+export esp  # Ensure esp is exported for use inside the chroot
+export root_partition
 export microcode_img
 export hostname
 export timezone
@@ -357,7 +351,7 @@ export grant_sudo
 
 # Chroot into the new system for configurations
 echo "[DEBUG] Entering chroot to configure the new system"
-arch-chroot /mnt /bin/bash <<EOF
+arch-chroot /mnt /bin/bash <<EOF_VAR
 # Set the timezone
 echo "[DEBUG] Setting timezone to $timezone"
 ln -sf "/usr/share/zoneinfo/$timezone" /etc/localtime
@@ -413,9 +407,55 @@ if [ "$create_user" == "yes" ]; then
   fi
 fi
 
+# Mount the EFI partition inside the chroot
+echo "[DEBUG] Mounting EFI partition inside chroot"
+mkdir -p /boot/efi
+mount "$esp" /boot/efi
+
+# Install rEFInd bootloader with Btrfs support and tweaks
+echo "[DEBUG] Installing rEFInd bootloader"
+pacman -Sy --noconfirm refind
+refind-install
+if [ \$? -ne 0 ]; then
+  echo "Failed to install rEFInd. Exiting."
+  exit 1
+fi
+
+# rEFInd configuration
+echo "[DEBUG] Modifying rEFInd configuration"
+sed -i 's/^#enable_mouse/enable_mouse/' /boot/efi/EFI/refind/refind.conf
+sed -i 's/^#mouse_speed .*/mouse_speed 8/' /boot/efi/EFI/refind/refind.conf
+sed -i 's/^#resolution .*/resolution max/' /boot/efi/EFI/refind/refind.conf
+sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/efi/EFI/refind/refind.conf
+
+# Create refind_linux.conf with the specified options
+echo "[DEBUG] Creating refind_linux.conf"
+partuuid=\$(blkid -s PARTUUID -o value $root_partition)
+initrd_line=""
+if [ -n "$microcode_img" ]; then
+  initrd_line="initrd=\\@\\boot\\$microcode_img initrd=\\@\\boot\\initramfs-%v.img"
+else
+  initrd_line="initrd=\\@\\boot\\initramfs-%v.img"
+fi
+
+cat << EOF > /boot/refind_linux.conf
+"Boot with standard options"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ \$initrd_line"
+"Boot using fallback initramfs"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ initrd=\\@\\boot\\initramfs-%v-fallback.img"
+"Boot to terminal"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ \$initrd_line systemd.unit=multi-user.target"
+EOF
+
+# Copy refind_linux.conf to rEFInd directory
+echo "[DEBUG] Copying refind_linux.conf to rEFInd directory"
+cp /boot/refind_linux.conf /boot/efi/EFI/refind/
+
+# Unmount the EFI partition after installation
+echo "[DEBUG] Unmounting EFI partition inside chroot"
+umount /boot/efi
+
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
 if [ -f /bin/dialog ]; then
+  pacman -Sy --noconfirm dialog
   dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
   if [ \$? -eq 0 ]; then
     pacman -Sy --noconfirm zsh
@@ -428,48 +468,11 @@ else
   echo "Dialog not found. Skipping shell selection."
 fi
 
-EOF
+EOF_VAR
 
 # Clear sensitive variables
 unset root_password
 unset user_password
-
-# Install rEFInd bootloader with Btrfs support and tweaks
-echo "[DEBUG] Installing rEFInd bootloader"
-dialog --infobox "Installing rEFInd bootloader..." 5 40
-arch-chroot /mnt pacman -Sy --noconfirm refind
-arch-chroot /mnt refind-install
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to install rEFInd. Exiting." 5 40
-  exit 1
-fi
-
-# rEFInd configuration
-echo "[DEBUG] Modifying rEFInd configuration"
-arch-chroot /mnt sed -i 's/^#enable_mouse/enable_mouse/' /boot/efi/EFI/refind/refind.conf
-arch-chroot /mnt sed -i 's/^#mouse_speed .*/mouse_speed 8/' /boot/efi/EFI/refind/refind.conf
-arch-chroot /mnt sed -i 's/^#resolution .*/resolution max/' /boot/efi/EFI/refind/refind.conf
-arch-chroot /mnt sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-hardened,linux-rt-lts,linux-zen,linux-lts,linux-rt,linux/' /boot/efi/EFI/refind/refind.conf
-
-# Create refind_linux.conf with the specified options
-echo "[DEBUG] Creating refind_linux.conf"
-partuuid=$(blkid -s PARTUUID -o value $root_partition)
-initrd_line=""
-if [ -n "$microcode_img" ]; then
-  initrd_line="initrd=\\@\\boot\\$microcode_img initrd=\\@\\boot\\initramfs-%v.img"
-else
-  initrd_line="initrd=\\@\\boot\\initramfs-%v.img"
-fi
-
-cat << EOF > /mnt/boot/refind_linux.conf
-"Boot with standard options"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ $initrd_line"
-"Boot using fallback initramfs"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=\\@\\boot\\initramfs-%v-fallback.img"
-"Boot to terminal"  "root=PARTUUID=$partuuid rw rootflags=subvol=@ initrd=\\@\\boot\\initramfs-%v.img systemd.unit=multi-user.target"
-EOF
-
-# Copy refind_linux.conf to rEFInd directory
-echo "[DEBUG] Copying refind_linux.conf to rEFInd directory"
-cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
 
 # Finish installation
 dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?
