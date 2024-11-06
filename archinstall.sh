@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Arch Linux Minimal Installation Script with Btrfs, rEFInd, and ZRAM
-# Version: v1.0.6 - Updated with root password prompt and chroot fixes
+# Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
+# Version: v1.0.7 - Includes chroot fix, password validation, and user account setup
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,7 +15,7 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.6" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.6).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.7" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.7).
 
 This version includes bug fixes and improvements for a more stable installation experience." 10 70
 
@@ -77,6 +77,173 @@ if [ -n "$existing_partitions" ]; then
   fi
 fi
 
+# Get partition names (after partitions are created)
+if [[ "$disk" == *"nvme"* ]]; then
+  esp="${disk}p1"
+  root_partition="${disk}p2"
+else
+  esp="${disk}1"
+  root_partition="${disk}2"
+fi
+
+# Prompt for hostname
+echo "[DEBUG] Prompting for hostname"
+hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
+if [ -z "$hostname" ]; then
+  dialog --msgbox "No hostname entered. Using default 'archlinux'." 6 50
+  hostname="archlinux"
+fi
+
+# Prompt for timezone using dialog
+echo "[DEBUG] Prompting for timezone"
+available_regions=$(ls /usr/share/zoneinfo | grep -v 'posix\|right\|Etc\|SystemV\|Factory')
+region=$(dialog --stdout --title "Select Region" --menu "Select your region:" 20 60 15 $(echo "$available_regions" | awk '{print $1, $1}'))
+if [ -z "$region" ]; then
+  dialog --msgbox "No region selected. Using 'UTC' as default." 6 50
+  timezone="UTC"
+else
+  available_cities=$(ls /usr/share/zoneinfo/$region)
+  city=$(dialog --stdout --title "Select City" --menu "Select your city:" 20 60 15 $(echo "$available_cities" | awk '{print $1, $1}'))
+  if [ -z "$city" ]; then
+    dialog --msgbox "No city selected. Using 'UTC' as default." 6 50
+    timezone="UTC"
+  else
+    timezone="$region/$city"
+  fi
+fi
+
+# Prompt for locale selection
+echo "[DEBUG] Prompting for locale selection"
+available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | sort)
+locale_options=()
+index=1
+while IFS= read -r line; do
+  locale_options+=("$index" "$line")
+  index=$((index + 1))
+done <<< "$available_locales"
+
+selected_number=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 "${locale_options[@]}")
+if [ -z "$selected_number" ]; then
+  dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
+  selected_locale="en_US.UTF-8"
+else
+  selected_locale=$(echo "$available_locales" | sed -n "${selected_number}p")
+fi
+
+# Prompt for root password with validation
+echo "[DEBUG] Prompting for root password"
+while true; do
+  root_password=$(dialog --stdout --insecure --passwordbox "Enter a root password (minimum 6 characters):" 10 50)
+  if [ -z "$root_password" ]; then
+    dialog --msgbox "Password cannot be empty. Please try again." 6 50
+    continue
+  elif [ ${#root_password} -lt 6 ]; then
+    dialog --msgbox "Password must be at least 6 characters long. Please try again." 6 60
+    continue
+  fi
+  root_password_confirm=$(dialog --stdout --insecure --passwordbox "Confirm the root password:" 8 50)
+  if [ "$root_password" != "$root_password_confirm" ]; then
+    dialog --msgbox "Passwords do not match. Please try again." 6 50
+  else
+    break
+  fi
+done
+
+# Prompt to create a new user account
+dialog --yesno "Would you like to create a new user account?" 7 50
+if [ $? -eq 0 ]; then
+  create_user="yes"
+  # Prompt for username
+  while true; do
+    username=$(dialog --stdout --inputbox "Enter the username for the new account:" 8 40)
+    if [ -z "$username" ]; then
+      dialog --msgbox "Username cannot be empty. Please try again." 6 50
+    else
+      break
+    fi
+  done
+
+  # Prompt for user password with validation
+  echo "[DEBUG] Prompting for user password"
+  while true; do
+    user_password=$(dialog --stdout --insecure --passwordbox "Enter a password for $username (minimum 6 characters):" 10 50)
+    if [ -z "$user_password" ]; then
+      dialog --msgbox "Password cannot be empty. Please try again." 6 50
+      continue
+    elif [ ${#user_password} -lt 6 ]; then
+      dialog --msgbox "Password must be at least 6 characters long. Please try again." 6 60
+      continue
+    fi
+    user_password_confirm=$(dialog --stdout --insecure --passwordbox "Confirm the password for $username:" 8 50)
+    if [ "$user_password" != "$user_password_confirm" ]; then
+      dialog --msgbox "Passwords do not match. Please try again." 6 50
+    else
+      break
+    fi
+  done
+
+  # Prompt to grant sudo privileges
+  dialog --yesno "Should the user '$username' have sudo privileges?" 7 50
+  if [ $? -eq 0 ]; then
+    grant_sudo="yes"
+  else
+    grant_sudo="no"
+  fi
+else
+  create_user="no"
+fi
+
+# Offer to install btrfs-progs
+echo "[DEBUG] Prompting for Btrfs tools installation"
+dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
+if [ $? -eq 0 ]; then
+  btrfs_pkg="btrfs-progs"
+else
+  btrfs_pkg=""
+fi
+
+# Offer to install NetworkManager
+echo "[DEBUG] Prompting for NetworkManager installation"
+dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
+if [ $? -eq 0 ]; then
+  networkmanager_pkg="networkmanager"
+else
+  networkmanager_pkg=""
+fi
+
+# Offer to enable ZRAM
+echo "[DEBUG] Prompting for ZRAM enablement"
+dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
+if [ $? -eq 0 ]; then
+  zram_pkg="zram-generator"
+else
+  zram_pkg=""
+fi
+
+# Detect CPU and offer to install microcode
+echo "[DEBUG] Detecting CPU vendor"
+cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+microcode_pkg=""
+microcode_img=""
+
+if [[ "$cpu_vendor" == *"intel"* ]]; then
+  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
+  if [ $? -eq 0 ]; then
+    microcode_pkg="intel-ucode"
+    microcode_img="intel-ucode.img"
+  fi
+elif [[ "$cpu_vendor" == *"amd"* ]]; then
+  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
+  if [ $? -eq 0 ]; then
+    microcode_pkg="amd-ucode"
+    microcode_img="amd-ucode.img"
+  fi
+else
+  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
+fi
+
+# All dialogs are now completed before installation starts
+
 # Create partitions
 echo "[DEBUG] Creating partitions on $disk"
 # Partition 1: EFI System Partition
@@ -98,16 +265,6 @@ fi
 
 # Wait for the system to recognize the partition changes
 sleep 5
-
-# Get partition names
-echo "[DEBUG] Determining partition names"
-if [[ "$disk" == *"nvme"* ]]; then
-  esp="${disk}p1"
-  root_partition="${disk}p2"
-else
-  esp="${disk}1"
-  root_partition="${disk}2"
-fi
 
 # Format partitions
 echo "[DEBUG] Formatting partitions"
@@ -169,114 +326,6 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Detect CPU and offer to install microcode
-echo "[DEBUG] Detecting CPU vendor"
-cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
-microcode_pkg=""
-microcode_img=""
-
-if [[ "$cpu_vendor" == *"intel"* ]]; then
-  dialog --yesno "CPU detected: Intel\nWould you like to install intel-ucode?" 7 60
-  if [ $? -eq 0 ]; then
-    microcode_pkg="intel-ucode"
-    microcode_img="intel-ucode.img"
-  fi
-elif [[ "$cpu_vendor" == *"amd"* ]]; then
-  dialog --yesno "CPU detected: AMD\nWould you like to install amd-ucode?" 7 60
-  if [ $? -eq 0 ]; then
-    microcode_pkg="amd-ucode"
-    microcode_img="amd-ucode.img"
-  fi
-else
-  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
-fi
-
-# Prompt for hostname
-echo "[DEBUG] Prompting for hostname"
-hostname=$(dialog --stdout --inputbox "Enter a hostname for your system:" 8 40)
-if [ -z "$hostname" ]; then
-  dialog --msgbox "No hostname entered. Using default 'archlinux'." 6 50
-  hostname="archlinux"
-fi
-
-# Prompt for timezone using dialog
-echo "[DEBUG] Prompting for timezone"
-available_regions=$(ls /usr/share/zoneinfo | grep -v 'posix\|right\|Etc\|SystemV\|Factory')
-region=$(dialog --stdout --title "Select Region" --menu "Select your region:" 20 60 15 $(echo "$available_regions" | awk '{print $1, $1}'))
-if [ -z "$region" ]; then
-  dialog --msgbox "No region selected. Using 'UTC' as default." 6 50
-  timezone="UTC"
-else
-  available_cities=$(ls /usr/share/zoneinfo/$region)
-  city=$(dialog --stdout --title "Select City" --menu "Select your city:" 20 60 15 $(echo "$available_cities" | awk '{print $1, $1}'))
-  if [ -z "$city" ]; then
-    dialog --msgbox "No city selected. Using 'UTC' as default." 6 50
-    timezone="UTC"
-  else
-    timezone="$region/$city"
-  fi
-fi
-
-# Prompt for locale selection
-echo "[DEBUG] Prompting for locale selection"
-available_locales=$(awk '/^[a-z]/ {print $1}' /usr/share/i18n/SUPPORTED | sort)
-locale_options=()
-index=1
-while IFS= read -r line; do
-  locale_options+=("$index" "$line")
-  index=$((index + 1))
-done <<< "$available_locales"
-
-selected_number=$(dialog --stdout --title "Select Locale" --menu "Select your locale:" 20 60 15 "${locale_options[@]}")
-if [ -z "$selected_number" ]; then
-  dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 6 50
-  selected_locale="en_US.UTF-8"
-else
-  selected_locale=$(echo "$available_locales" | sed -n "${selected_number}p")
-fi
-
-# Offer to install btrfs-progs
-echo "[DEBUG] Prompting for Btrfs tools installation"
-dialog --yesno "Would you like to install btrfs-progs for Btrfs management?" 7 60
-if [ $? -eq 0 ]; then
-  btrfs_pkg="btrfs-progs"
-else
-  btrfs_pkg=""
-fi
-
-# Offer to install NetworkManager
-echo "[DEBUG] Prompting for NetworkManager installation"
-dialog --yesno "Would you like to install NetworkManager for network management?" 7 60
-if [ $? -eq 0 ]; then
-  networkmanager_pkg="networkmanager"
-else
-  networkmanager_pkg=""
-fi
-
-# Offer to enable ZRAM
-echo "[DEBUG] Prompting for ZRAM enablement"
-dialog --yesno "Would you like to enable ZRAM for swap?" 7 50
-if [ $? -eq 0 ]; then
-  zram_pkg="zram-generator"
-else
-  zram_pkg=""
-fi
-
-# Prompt for root password
-echo "[DEBUG] Prompting for root password"
-root_password=$(dialog --stdout --insecure --passwordbox "Enter a root password:" 8 40)
-if [ -z "$root_password" ]; then
-  dialog --msgbox "No password entered. You must set a root password." 6 50
-  exit 1
-fi
-
-# Confirm root password
-root_password_confirm=$(dialog --stdout --insecure --passwordbox "Confirm the root password:" 8 40)
-if [ "$root_password" != "$root_password_confirm" ]; then
-  dialog --msgbox "Passwords do not match. Please run the installer again." 6 50
-  exit 1
-fi
-
 # Install base system
 echo "[DEBUG] Installing base system"
 dialog --infobox "Installing base system..." 5 40
@@ -301,6 +350,10 @@ export timezone
 export selected_locale
 export zram_pkg
 export root_password
+export create_user
+export username
+export user_password
+export grant_sudo
 
 # Chroot into the new system for configurations
 echo "[DEBUG] Entering chroot to configure the new system"
@@ -342,19 +395,44 @@ fi
 echo "[DEBUG] Setting root password"
 echo "root:$root_password" | chpasswd
 
-EOF
-
 # Clear the root password variable for security
 unset root_password
-unset root_password_confirm
+
+# Create user account if requested
+if [ "$create_user" == "yes" ]; then
+  echo "[DEBUG] Creating user account: $username"
+  useradd -m "$username"
+  echo "$username:$user_password" | chpasswd
+  unset user_password
+
+  if [ "$grant_sudo" == "yes" ]; then
+    echo "[DEBUG] Granting sudo privileges to $username"
+    pacman -Sy --noconfirm sudo
+    usermod -aG wheel "$username"
+    sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
+  fi
+fi
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
-dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
-if [ $? -eq 0 ]; then
-  arch-chroot /mnt pacman -Sy --noconfirm zsh
-  arch-chroot /mnt chsh -s /bin/zsh
+if [ -f /bin/dialog ]; then
+  dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
+  if [ \$? -eq 0 ]; then
+    pacman -Sy --noconfirm zsh
+    chsh -s /bin/zsh
+    if [ "$create_user" == "yes" ]; then
+      chsh -s /bin/zsh "$username"
+    fi
+  fi
+else
+  echo "Dialog not found. Skipping shell selection."
 fi
+
+EOF
+
+# Clear sensitive variables
+unset root_password
+unset user_password
 
 # Install rEFInd bootloader with Btrfs support and tweaks
 echo "[DEBUG] Installing rEFInd bootloader"
@@ -393,52 +471,6 @@ EOF
 echo "[DEBUG] Copying refind_linux.conf to rEFInd directory"
 cp /mnt/boot/refind_linux.conf /mnt/boot/efi/EFI/refind/
 
-# Create first_login.sh script for initial login instructions
-echo "[DEBUG] Creating first_login.sh script"
-cat << 'EOM' > /mnt/root/first_login.sh
-#!/bin/bash
-
-clear
-cat << 'EOF'
-Welcome to your new Arch Linux system!
-
-To create a new user and grant sudo privileges, follow these steps:
-
-1. Create a new user (replace 'username' with your desired username):
-   useradd -m username
-
-2. Set the password for the new user:
-   passwd username
-
-3. Install sudo (if not already installed):
-   pacman -Sy sudo
-
-4. Add the user to the wheel group:
-   usermod -aG wheel username
-
-5. Edit the sudoers file to grant sudo privileges:
-   EDITOR=nano visudo
-
-   Uncomment the line:
-   %wheel ALL=(ALL) ALL
-
-6. Install a text editor (e.g., nano, vim, or emacs) if needed:
-   pacman -Sy nano
-
-You're all set!
-EOF
-
-# Remove the script and its call from .bash_profile
-rm -- "$0"
-sed -i '/first_login.sh/d' ~/.bash_profile
-EOM
-
-# Make the script executable
-chmod +x /mnt/root/first_login.sh
-
-# Add the script to root's .bash_profile
-echo "if [ -f ~/first_login.sh ]; then ~/first_login.sh; fi" >> /mnt/root/.bash_profile
-
 # Finish installation
 dialog --yesno "Installation complete! Would you like to reboot now or drop to the terminal for additional configuration?
 
@@ -457,6 +489,8 @@ else
   done
   # Drop into the chroot environment
   echo "[DEBUG] Dropping into chroot environment for additional configuration"
+  echo "Type 'exit' to leave the chroot environment and complete the installation."
+  sleep 2
   arch-chroot /mnt /bin/bash
 
   # After exiting chroot, unmount filesystems
