@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.14 - Adjusted to prevent double mounting of the EFI partition
+# Version: v1.0.15 - Corrected EFI partition mounting and file placement
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -15,9 +15,9 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.14" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.14).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.15" --msgbox "You are using the latest version of the Arch Linux Minimal Installer script (v1.0.15).
 
-This version includes all the features and fixes we've discussed, including preventing double mounting of the EFI partition." 10 70
+This version corrects the EFI partition mounting and file placement to prevent double mounting and ensure proper bootloader configuration." 10 70
 
 # Clear the screen
 clear
@@ -318,7 +318,13 @@ mount -o $mount_options,subvol=@pkg $root_partition /mnt/var/cache/pacman/pkg
 mount -o $mount_options,subvol=@log $root_partition /mnt/var/log
 mount -o $mount_options,subvol=@snapshots $root_partition /mnt/.snapshots
 
-# **Do not mount EFI partition during installation**
+# **Mount EFI partition before chrooting**
+echo "[DEBUG] Mounting EFI partition $esp"
+mount "$esp" /mnt/boot/efi
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
+  exit 1
+fi
 
 # Install base system
 echo "[DEBUG] Installing base system"
@@ -336,10 +342,6 @@ if [ $? -ne 0 ]; then
   dialog --msgbox "Failed to generate fstab. Exiting." 5 40
   exit 1
 fi
-
-# **Manually add EFI partition to fstab**
-echo "[DEBUG] Adding EFI partition to fstab"
-echo "UUID=$(blkid -s UUID -o value $esp)  /boot/efi  vfat  umask=0077  0 2" >> /mnt/etc/fstab
 
 # Set up variables for chroot
 export esp  # Ensure esp is exported for use inside the chroot
@@ -451,9 +453,7 @@ cat << EOF > /boot/refind_linux.conf
 "Boot to terminal"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ \$initrd_line systemd.unit=multi-user.target"
 EOF
 
-# Copy refind_linux.conf to rEFInd directory
-echo "[DEBUG] Copying refind_linux.conf to rEFInd directory"
-cp /boot/refind_linux.conf /boot/efi/EFI/refind/
+# **Do not copy refind_linux.conf to EFI partition**
 
 # Ask if the user wants to use bash or install zsh
 echo "[DEBUG] Prompting for shell selection"
