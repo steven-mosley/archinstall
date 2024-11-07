@@ -1,7 +1,26 @@
 #!/bin/bash
 
 # Arch Linux Minimal Installation Script with Btrfs, rEFInd, ZRAM, and User Setup
-# Version: v1.0.33 - Fixed partition detection inconsistencies and improved progress indicators
+# Version: v1.0.35 - Added option for Minimal or Custom Install, fixed partition detection, progress indicators, and ensured rEFInd installation
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# Function to install necessary packages
+install_packages() {
+  required_packages=("dialog" "gptfdisk" "util-linux" "arch-install-scripts" "btrfs-progs" "refind" "zram-generator" "networkmanager" "sudo" "zsh")
+  for pkg in "${required_packages[@]}"; do
+    if ! pacman -Qi "$pkg" &> /dev/null; then
+      pacman -Sy --noconfirm "$pkg"
+    fi
+  done
+}
+
+# Function to retrieve existing partitions
+get_partitions() {
+  local disk="$1"
+  lsblk -ln -o NAME,TYPE,SIZE "$disk" | awk '$2 == "part" {print $1, $3}'
+}
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -9,24 +28,13 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Install necessary packages if not already installed
-if ! command -v dialog &> /dev/null; then
-  pacman -Sy --noconfirm dialog > /dev/null 2>&1
-fi
-if ! command -v sgdisk &> /dev/null; then
-  pacman -Sy --noconfirm gptfdisk > /dev/null 2>&1
-fi
-if ! command -v lsblk &> /dev/null; then
-  pacman -Sy --noconfirm util-linux > /dev/null 2>&1
-fi
-if ! command -v pacstrap &> /dev/null; then
-  pacman -Sy --noconfirm arch-install-scripts > /dev/null 2>&1
-fi
+# Install necessary packages
+install_packages
 
 # Display script version
-dialog --title "Arch Linux Minimal Installer - Version v1.0.33" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.33).
+dialog --title "Arch Linux Minimal Installer - Version v1.0.35" --msgbox "Welcome to the Arch Linux Minimal Installer script (v1.0.35).
 
-This version fixes partition detection inconsistencies and improves the progress indicators." 10 70
+This version introduces the option to perform a Minimal or Custom installation, fixes partition detection inconsistencies, progress indicators, and ensures the rEFInd bootloader is installed correctly." 12 70
 
 # Clear the screen
 clear
@@ -55,8 +63,113 @@ dialog --title "Arch Linux Minimal Installer" --msgbox "Welcome to the Arch Linu
 
 This installer provides a quick and easy minimal install for Arch Linux, setting up a base system that boots to a terminal." 12 70
 
-# Ask if the user wants to use the default Btrfs subvolume scheme
-dialog --yesno "The default Btrfs subvolume scheme is as follows:
+# Ask the user to choose between Minimal and Custom Install
+install_type=$(dialog --stdout --title "Choose Installation Type" --menu "Select the type of installation you want to perform:
+
+- **Minimal Install:** Uses default settings with essential packages.
+- **Custom Install:** Allows you to select optional packages and configurations." 15 70 2 \
+  "Minimal" "Minimal Install with default settings" \
+  "Custom" "Custom Install with optional packages and configurations")
+
+# Check if the user canceled the dialog
+if [ -z "$install_type" ]; then
+  dialog --msgbox "No installation type selected. Exiting." 5 40
+  clear
+  exit 1
+fi
+
+# Function to handle Minimal Install
+minimal_install() {
+  # Use default Btrfs subvolume scheme
+  default_subvolumes=true
+  # Select default packages
+  selected_packages=()
+}
+
+# Function to handle Custom Install
+custom_install() {
+  # Allow user to select optional packages
+  options=(
+    "btrfs" "Install btrfs-progs" off
+    "networkmanager" "Install NetworkManager" off
+    "zram" "Enable ZRAM" off
+  )
+  selected_options=$(dialog --stdout --separate-output --checklist "Select optional features (use spacebar to select):" 15 60 4 "${options[@]}")
+  
+  if [ -z "$selected_options" ]; then
+    dialog --msgbox "No optional features selected." 5 40
+  fi
+  
+  # Initialize package variables
+  btrfs_pkg=""
+  networkmanager_pkg=""
+  zram_pkg=""
+  
+  # Process selected options
+  while IFS= read -r opt; do
+    case "$opt" in
+      btrfs)
+        btrfs_pkg="btrfs-progs"
+        ;;
+      networkmanager)
+        networkmanager_pkg="networkmanager"
+        ;;
+      zram)
+        zram_pkg="zram-generator"
+        ;;
+    esac
+  done <<< "$selected_options"
+  
+  # Trim any whitespace
+  btrfs_pkg=$(echo "$btrfs_pkg" | xargs)
+  networkmanager_pkg=$(echo "$networkmanager_pkg" | xargs)
+  zram_pkg=$(echo "$zram_pkg" | xargs)
+  
+  # Detect CPU and offer to install microcode
+  cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+  microcode_pkg=""
+  microcode_img=""
+  
+  if [[ "$cpu_vendor" == *"intel"* ]]; then
+    dialog --yesno "CPU detected: Intel
+Would you like to install intel-ucode?" 7 60
+      if [ $? -eq 0 ]; then
+        microcode_pkg="intel-ucode"
+        microcode_img="intel-ucode.img"
+      fi
+  elif [[ "$cpu_vendor" == *"amd"* ]]; then
+    dialog --yesno "CPU detected: AMD
+Would you like to install amd-ucode?" 7 60
+      if [ $? -eq 0 ]; then
+        microcode_pkg="amd-ucode"
+        microcode_img="amd-ucode.img"
+      fi
+  else
+    dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
+  fi
+  
+  # Add microcode package if selected
+  [ -n "$microcode_pkg" ] && selected_packages+=("$microcode_pkg")
+  
+  # Add optional packages
+  [ -n "$btrfs_pkg" ] && selected_packages+=("$btrfs_pkg")
+  [ -n "$zram_pkg" ] && selected_packages+=("$zram_pkg")
+  [ -n "$networkmanager_pkg" ] && selected_packages+=("$networkmanager_pkg")
+  
+  # Set selected subvolume scheme to false as user is customizing
+  default_subvolumes=false
+}
+
+# Determine installation type
+if [ "$install_type" == "Minimal" ]; then
+  minimal_install
+else
+  custom_install
+fi
+
+# Ask if the user wants to use the default Btrfs subvolume scheme (only for Minimal Install)
+if [ "$install_type" == "Minimal" ]; then
+  dialog --yesno "The default Btrfs subvolume scheme is as follows:
 
 @ mounted at /
 @home mounted at /home
@@ -65,17 +178,13 @@ dialog --yesno "The default Btrfs subvolume scheme is as follows:
 @snapshots mounted at /.snapshots
 
 Would you like to use this scheme?" 15 70
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Installation canceled. Exiting." 5 40
-  clear
-  exit 1
+    
+  if [ $? -ne 0 ]; then
+    dialog --msgbox "Installation canceled. Exiting." 5 40
+    clear
+    exit 1
+  fi
 fi
-
-# Function to retrieve existing partitions
-get_partitions() {
-  local disk="$1"
-  lsblk -ln -o NAME,TYPE,SIZE "$disk" | awk '$2 == "part" {print $1, $3}'
-}
 
 # Build disk options array
 disk_options=()
@@ -100,10 +209,19 @@ while read -r disk_line; do
   disk_options+=("$disk" "$disk_info")
 done < <(lsblk -dn -o NAME,SIZE | grep -E 'sd|hd|vd|nvme|mmcblk')
 
+# Check if any disks are found
+if [ ${#disk_options[@]} -eq 0 ]; then
+  dialog --msgbox "No suitable disks found. Exiting." 5 40
+  clear
+  exit 1
+fi
+
 # Display disk selection menu
 disk=$(dialog --stdout --title "Select Disk" --menu "Select the disk to install Arch Linux on:
 
 Use arrow keys to navigate and Enter to select." 20 70 10 "${disk_options[@]}")
+
+# Check if user canceled the selection
 if [ -z "$disk" ]; then
   dialog --msgbox "No disk selected. Exiting." 5 40
   clear
@@ -118,20 +236,20 @@ if [ -n "$existing_partitions" ]; then
 $existing_partitions
 
 Do you want to continue and reformat the disk?" 20 70
-  if [ $? -ne 0 ]; then
-    dialog --msgbox "Installation canceled by user. Exiting." 5 40
-    clear
-    exit 1
-  fi
+    if [ $? -ne 0 ]; then
+      dialog --msgbox "Installation canceled by user. Exiting." 5 40
+      clear
+      exit 1
+    fi
 else
   dialog --title "Disk $disk" --yesno "No existing partitions were found on $disk.
 
 Do you want to continue and format the disk?" 10 70
-  if [ $? -ne 0 ]; then
-    dialog --msgbox "Installation canceled by user. Exiting." 5 40
-    clear
-    exit 1
-  fi
+    if [ $? -ne 0 ]; then
+      dialog --msgbox "Installation canceled by user. Exiting." 5 40
+      clear
+      exit 1
+    fi
 fi
 
 # Show the proposed partition table
@@ -302,124 +420,96 @@ else
   create_user="no"
 fi
 
-# Combine optional features into a single selection dialog with descriptive tags
-options=(
-  "btrfs" "Install btrfs-progs" off
-  "networkmanager" "Install NetworkManager" off
-  "zram" "Enable ZRAM" off
+# Handle Minimal or Custom Install
+if [ "$install_type" == "Custom" ]; then
+  # Optional packages already handled in custom_install function
+  :
+elif [ "$install_type" == "Minimal" ]; then
+  # Minimal Install: Use default Btrfs subvolumes and no optional packages
+  selected_packages=()
+  default_subvolumes=true
+fi
+
+# Show the proposed partition table
+proposed_partitions=$(cat <<EOF
+$disk (Size: $(lsblk -dn -o SIZE "$disk"))
+
+  Partition 1: EFI System Partition (300 MiB)
+  Partition 2: Linux Filesystem (Rest of the disk)
+EOF
 )
-selected_options=$(dialog --stdout --separate-output --checklist "Select optional features (use spacebar to select):" 15 60 4 "${options[@]}")
-if [ -z "$selected_options" ]; then
-  dialog --msgbox "No optional features selected." 5 40
+
+dialog --title "Proposed Partition Scheme for $disk" --yesno "The disk will be partitioned as follows:
+
+$proposed_partitions
+
+All data on the disk will be erased.
+
+Do you want to proceed?" 20 70
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Installation canceled by user. Exiting." 5 40
+  clear
+  exit 1
 fi
 
-# Initialize variables
-btrfs_pkg=""
-networkmanager_pkg=""
-zram_pkg=""
+# Confirm final decision
+dialog --yesno "Are you absolutely sure you want to erase all data on $disk and proceed with the installation?" 7 60
+if [ $? -ne 0 ]; then
+  dialog --msgbox "Installation canceled by user. Exiting." 5 40
+  clear
+  exit 1
+fi
 
-# Process selected options without subshell
-while IFS= read -r opt; do
-  case "$opt" in
-    btrfs)
-      btrfs_pkg="btrfs-progs"
-      ;;
-    networkmanager)
-      networkmanager_pkg="networkmanager"
-      ;;
-    zram)
-      zram_pkg="zram-generator"
-      ;;
-  esac
-done <<< "$selected_options"
+# Destroy existing partitions
+dialog --infobox "Destroying existing partitions on $disk..." 5 50
+if ! sgdisk --zap-all "$disk" > /tmp/sgdisk_zap_output 2>&1; then
+  dialog --msgbox "Failed to destroy partitions on $disk. Error: $(cat /tmp/sgdisk_zap_output)" 10 60
+  exit 1
+fi
 
-# Trim any whitespace (just in case)
-btrfs_pkg=$(echo "$btrfs_pkg" | xargs)
-networkmanager_pkg=$(echo "$networkmanager_pkg" | xargs)
-zram_pkg=$(echo "$zram_pkg" | xargs)
+# Wait for the system to recognize the partition changes
+sleep 2
 
-# Detect CPU and offer to install microcode
-cpu_vendor=$(grep -m1 -E 'vendor_id|Vendor ID' /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
-microcode_pkg=""
-microcode_img=""
+# Create new partitions
+dialog --infobox "Creating new partition table on $disk..." 5 50
+if ! sgdisk -n 1:0:+300M -t 1:ef00 "$disk" > /tmp/sgdisk_new_output 2>&1; then
+  dialog --msgbox "Failed to create EFI partition on $disk. Error: $(cat /tmp/sgdisk_new_output)" 10 60
+  exit 1
+fi
+if ! sgdisk -n 2:0:0 -t 2:8300 "$disk" >> /tmp/sgdisk_new_output 2>&1; then
+  dialog --msgbox "Failed to create root partition on $disk. Error: $(cat /tmp/sgdisk_new_output)" 10 60
+  exit 1
+fi
 
-if [[ "$cpu_vendor" == *"intel"* ]]; then
-  dialog --yesno "CPU detected: Intel
-Would you like to install intel-ucode?" 7 60
-  if [ $? -eq 0 ]; then
-    microcode_pkg="intel-ucode"
-    microcode_img="intel-ucode.img"
-  fi
-elif [[ "$cpu_vendor" == *"amd"* ]]; then
-  dialog --yesno "CPU detected: AMD
-Would you like to install amd-ucode?" 7 60
-  if [ $? -eq 0 ]; then
-    microcode_pkg="amd-ucode"
-    microcode_img="amd-ucode.img"
-  fi
+# Wait for the system to recognize the partition changes
+sleep 2
+
+# Get partition names (after partitions are created)
+if [[ "$(basename "$disk")" == nvme* ]] || [[ "$(basename "$disk")" == mmcblk* ]]; then
+  esp="${disk}p1"
+  root_partition="${disk}p2"
 else
-  dialog --msgbox "CPU vendor not detected. Microcode will not be installed." 6 60
+  esp="${disk}1"
+  root_partition="${disk}2"
 fi
 
-# Combine optional features into the packages array
-packages=(base linux linux-firmware)
+# Clean up temporary files
+rm -f /tmp/sgdisk_zap_output /tmp/sgdisk_new_output
 
-# Append optional packages if selected
-[ -n "$microcode_pkg" ] && packages+=("$microcode_pkg")
-[ -n "$btrfs_pkg" ] && packages+=("$btrfs_pkg")
-[ -n "$zram_pkg" ] && packages+=("$zram_pkg")
-[ -n "$networkmanager_pkg" ] && packages+=("$networkmanager_pkg")
+# Prompt for hostname (already done above)
 
-# Create Btrfs subvolumes
-dialog --infobox "Creating Btrfs subvolumes..." 5 50
-mkfs.btrfs -f -L Arch "$root_partition" > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to format root partition as Btrfs. Exiting." 5 40
-  exit 1
-fi
+# Prompt for timezone (already done above)
 
-mount "$root_partition" /mnt
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to mount root partition. Exiting." 5 40
-  exit 1
-fi
+# Prompt for locale (already done above)
 
-btrfs su cr /mnt/@ > /dev/null 2>&1
-btrfs su cr /mnt/@home > /dev/null 2>&1
-btrfs su cr /mnt/@pkg > /dev/null 2>&1
-btrfs su cr /mnt/@log > /dev/null 2>&1
-btrfs su cr /mnt/@snapshots > /dev/null 2>&1
+# Prompt for root password (already done above)
 
-# Unmount root partition
-umount /mnt
-
-# Mount subvolumes with options
-mount_options="noatime,compress=zstd,discard=async,space_cache=v2"
-dialog --infobox "Mounting Btrfs subvolumes..." 5 50
-mount -o $mount_options,subvol=@ "$root_partition" /mnt
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to mount root subvolume. Exiting." 5 40
-  exit 1
-fi
-
-mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-mount -o $mount_options,subvol=@home "$root_partition" /mnt/home
-mount -o $mount_options,subvol=@pkg "$root_partition" /mnt/var/cache/pacman/pkg
-mount -o $mount_options,subvol=@log "$root_partition" /mnt/var/log
-mount -o $mount_options,subvol=@snapshots "$root_partition" /mnt/.snapshots
-
-# Mount EFI partition at /mnt/efi before chrooting
-dialog --infobox "Mounting EFI partition at /mnt/efi..." 5 50
-mount "$esp" /mnt/efi
-if [ $? -ne 0 ]; then
-  dialog --msgbox "Failed to mount EFI partition. Exiting." 5 40
-  exit 1
-fi
+# Prompt to create user account (already done above)
 
 # Install base system
 dialog --infobox "Installing base system...
 This may take a while." 5 50
-if ! pacstrap /mnt "${packages[@]}" > /tmp/pacstrap_install.log 2>&1; then
+if ! pacstrap /mnt base linux linux-firmware "${selected_packages[@]}" > /tmp/pacstrap_install.log 2>&1; then
   dialog --msgbox "Failed to install base system. Check /tmp/pacstrap_install.log for details." 7 60
   exit 1
 fi
@@ -432,8 +522,13 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Set up variables for chroot
-export esp  # Ensure esp is exported for use inside the chroot
+# Mount necessary filesystems before chrooting
+for dir in dev proc sys run; do
+  mount --rbind "/$dir" "/mnt/$dir"
+done
+
+# Export variables for chroot
+export esp
 export root_partition
 export microcode_img
 export hostname
@@ -445,11 +540,6 @@ export create_user
 export username
 export user_password
 export grant_sudo
-
-# Mount necessary filesystems before chrooting
-for dir in dev proc sys run; do
-  mount --rbind "/$dir" "/mnt/$dir"
-done
 
 # Chroot into the new system for configurations
 arch-chroot /mnt /bin/bash <<EOF_VAR
@@ -497,15 +587,14 @@ if [ "$create_user" == "yes" ]; then
   unset user_password
 
   if [ "$grant_sudo" == "yes" ]; then
-    pacman -Sy --noconfirm sudo > /dev/null 2>&1
     usermod -aG wheel "$username"
     sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
   fi
 fi
 
-# Install rEFInd bootloader with --no-mount option
+# Install rEFInd bootloader
 pacman -Sy --noconfirm refind > /dev/null 2>&1
-refind-install --yes --no-mount > /dev/null 2>&1
+refind-install --no-sudo --yes --alldrivers > /dev/null 2>&1
 
 if [ \$? -ne 0 ]; then
   echo "Failed to install rEFInd. Exiting."
@@ -522,20 +611,19 @@ sed -i 's/^#extra_kernel_version_strings .*/extra_kernel_version_strings linux-h
 partuuid=\$(blkid -s PARTUUID -o value $root_partition)
 initrd_line=""
 if [ -n "$microcode_img" ]; then
-  initrd_line="initrd=\\@\\boot\\$microcode_img initrd=\\@\\boot\\initramfs-%v.img"
+  initrd_line="initrd=/boot/$microcode_img initrd=/boot/initramfs-%v.img"
 else
-  initrd_line="initrd=\\@\\boot\\initramfs-%v.img"
+  initrd_line="initrd=/boot/initramfs-%v.img"
 fi
 
 cat << EOF > /boot/refind_linux.conf
-"Boot with standard options"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ \$initrd_line"
-"Boot using fallback initramfs"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ initrd=\\@\\boot\\initramfs-%v-fallback.img"
-"Boot to terminal"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ \$initrd_line systemd.unit=multi-user.target"
+"Boot with standard options"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ $initrd_line"
+"Boot using fallback initramfs"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ initrd=/boot/initramfs-%v-fallback.img"
+"Boot to terminal"  "root=PARTUUID=\$partuuid rw rootflags=subvol=@ $initrd_line systemd.unit=multi-user.target"
 EOF
 
 # Ask if the user wants to use bash or install zsh
 if [ -f /bin/dialog ]; then
-  pacman -Sy --noconfirm dialog > /dev/null 2>&1
   dialog --yesno "Would you like to use Zsh as your default shell instead of Bash?" 7 50
   if [ \$? -eq 0 ]; then
     pacman -Sy --noconfirm zsh > /dev/null 2>&1
