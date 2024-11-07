@@ -6,7 +6,15 @@ import os
 import shutil
 import time
 import logging
-from dialog import Dialog
+
+# Attempt to import the Dialog module, prompt installation if missing
+try:
+    from dialog import Dialog
+except ImportError:
+    print("The 'dialog' module is not installed. Installing now...")
+    subprocess.run(["pacman", "-Sy", "--noconfirm", "python-pip"], check=True)
+    subprocess.run(["pip", "install", "python-dialog"], check=True)
+    from dialog import Dialog
 
 # Initialize dialog
 d = Dialog(dialog="dialog", autowidgetsize=True)
@@ -60,8 +68,10 @@ def install_packages():
         "sudo",
         "zsh",
         "python-pip",
-        "python-dialog"
+        "python-pythondialog"
     ]
+    # Remove 'python-pythondialog' as it doesn't exist; handled via pip
+    required_packages = [pkg for pkg in required_packages if pkg != "python-pythondialog"]
     for pkg in required_packages:
         logging.debug(f"Checking if package {pkg} is installed.")
         result = subprocess.run(["pacman", "-Qi", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -73,7 +83,7 @@ def welcome_message():
     """
     Displays a welcome message.
     """
-    d.msgbox("""Welcome to the Arch Linux Installer Script (v1.0.0).
+    d.msgbox("""Welcome to the Arch Linux Installer Script (v1.0.38).
 
 This script will guide you through the installation of Arch Linux with options for a Minimal or Custom setup.
 
@@ -128,10 +138,10 @@ def confirm_reformat(disk):
     """
     Confirms with the user if they want to reformat the selected disk.
     """
-    partitions = run_command(["lsblk", "-ln", "-o", "NAME", disk], capture_output=True)
-    existing_partitions = "\n".join(run_command(["lsblk", "-ln", "-o", "PARTTYPE", disk], capture_output=True).splitlines())
-    if "part" in existing_partitions:
-        code = d.yesno(f"The following partitions exist on {disk}:\n\n{partitions}\n\nDo you want to continue and reformat the disk?", width=70, height=15)
+    partitions = run_command(["lsblk", "-ln", "-o", "TYPE", disk], capture_output=True)
+    partition_names = run_command(["lsblk", "-ln", "-o", "NAME,TYPE,SIZE", disk], capture_output=True)
+    if "part" in partitions:
+        code = d.yesno(f"The following partitions exist on {disk}:\n\n{partition_names}\n\nDo you want to continue and reformat the disk?", width=70, height=15)
     else:
         code = d.yesno(f"No existing partitions found on {disk}.\n\nDo you want to continue and format the disk?", width=70, height=10)
     if code != d.OK:
@@ -372,12 +382,11 @@ def generate_fstab():
     Generates the fstab file.
     """
     d.infobox("Generating fstab...", width=40, height=5)
-    run_command(["genfstab", "-U", "/mnt"], capture_output=True, text=False)
     fstab = run_command(["genfstab", "-U", "/mnt"], capture_output=True)
     with open("/mnt/etc/fstab", "w") as f:
         f.write(fstab)
 
-def configure_system(create_user, username, user_password, grant_sudo, hostname, timezone, locale, zram_pkg):
+def configure_system(create_user, username, user_password, grant_sudo, hostname, timezone, locale, zram_pkg, microcode_img, root_password):
     """
     Configures the system by chrooting into it and performing necessary setups.
     """
@@ -387,19 +396,6 @@ def configure_system(create_user, username, user_password, grant_sudo, hostname,
     
     # Install dialog inside chroot for further prompts
     run_command(["arch-chroot", "/mnt", "pacman", "-Sy", "--noconfirm", "dialog"])
-    
-    # Prepare variables for chroot
-    env = os.environ.copy()
-    env["esp"] = esp
-    env["root_partition"] = root_partition
-    env["hostname"] = hostname
-    env["timezone"] = timezone
-    env["locale"] = locale
-    env["zram_pkg"] = zram_pkg
-    env["create_user"] = str(create_user)
-    env["username"] = username
-    env["user_password"] = user_password
-    env["grant_sudo"] = str(grant_sudo)
     
     # Define the chroot script
     chroot_script = f"""#!/bin/bash
@@ -484,18 +480,10 @@ if [ $? -eq 0 ]; then
         chsh -s /bin/zsh "{username}"
     fi
 fi
-
 """
 
     # Execute the chroot script
     run_command(["arch-chroot", "/mnt", "bash", "-c", chroot_script])
-
-def install_refind_bootloader():
-    """
-    Installs and configures the rEFInd bootloader.
-    """
-    # This is handled within the chroot_script function
-    pass
 
 def finish_installation():
     """
@@ -532,6 +520,8 @@ def main():
         if install_type == "Minimal":
             selected_packages = []
             default_subvolumes = True
+            microcode_pkg = ""
+            microcode_img = ""
         else:
             selected_features = select_optional_features()
             selected_packages = []
@@ -573,7 +563,8 @@ def main():
         generate_fstab()
         
         # Configure system within chroot
-        configure_system(create_user, username, user_password, grant_sudo, hostname, timezone, locale, zram_pkg if install_type == "Custom" else "")
+        configure_system(create_user, username, user_password, grant_sudo, hostname, timezone, locale, 
+                        zram_pkg if install_type == "Custom" else "", microcode_img, root_password)
         
         # Finish installation
         finish_installation()
