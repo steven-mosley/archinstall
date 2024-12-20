@@ -3,6 +3,16 @@
 # Bash script to automate Hyprland setup with all requested utilities and configurations
 # Written for the picky configuration overlord you are.
 
+# TODOS:
+# Implement sane defaults while keeping the vanilla Hyprland experience
+# - Fix uncommenting /etc/pacman.conf.
+# - Remap SUPER T to Terminal and SUPER Q to close active window
+# - Add keybinds for hyprshot
+# - Change default file manager to something not so bloated (such as Thunar)
+#     - Or maybe not include a file manager at all and leave that up to the user
+# as the whole point of this project is to simply have an easy, quick to install
+# default Hyprland experience.
+
 set -e
 
 # Function to check if a command exists
