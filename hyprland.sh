@@ -12,7 +12,7 @@ command_exists() {
 
 # Step 0: Check for sudo and user privileges
 if ! command_exists sudo; then
-    echo "sudo is not installed. Installing it now, you reckless fuck..."
+    echo "sudo is not installed. Installing it now..."
     if command_exists pacman; then
         su -c "pacman -S --needed sudo --noconfirm" || {
             echo "Failed to install sudo. Run this script as root or a competent user!"
@@ -31,7 +31,7 @@ if ! sudo -l >/dev/null 2>&1; then
 fi
 
 # Step 1: Check for git and base-devel
-echo "Checking for dependencies, you unprepared bastard..."
+echo "Checking for dependencies, you unprepared ..."
 MISSING_PACKAGES=()
 for package in git base-devel; do
     if ! pacman -Qi $package &>/dev/null; then
@@ -52,7 +52,7 @@ if ! command_exists yay && ! command_exists paru; then
     select CHOICE in "yay" "paru"; do
         case $CHOICE in
         yay)
-            echo "Installing yay the proper way, you impatient bastard..."
+            echo "Installing yay"
             git clone https://aur.archlinux.org/yay.git /tmp/yay
             cd /tmp/yay
             makepkg -si --noconfirm
@@ -61,7 +61,7 @@ if ! command_exists yay && ! command_exists paru; then
             break
             ;;
         paru)
-            echo "Installing paru the proper way, you lazy shit..."
+            echo "Installing paru"
             git clone https://aur.archlinux.org/paru.git /tmp/paru
             cd /tmp/paru
             makepkg -si --noconfirm
@@ -106,7 +106,7 @@ EOF"
     echo "Enabling NVIDIA services..."
     sudo systemctl enable nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service
 else
-    echo "No NVIDIA card detected. Skipping NVIDIA setup, genius."
+    echo "No NVIDIA card detected. Skipping NVIDIA setup."
 fi
 
 
@@ -250,4 +250,4 @@ EOF"
 echo "Enabling Hypridle and Hyprlock services..."
 systemctl --user enable hypridle.service
 
-echo "Installation complete! Reboot and log in via uwsm, you glorious bastard!"
+echo "Installation complete! Reboot and log in to the tty. uwsm should autostart prompting to select a compositor."
