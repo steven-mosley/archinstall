@@ -48,39 +48,32 @@ fi
 if ! command_exists yay && ! command_exists paru; then
     echo "Neither yay nor paru found. Prompting for installation choice."
 
-    if ! command_exists whiptail; then
-        echo "Installing whiptail for TUI menu..."
-        sudo pacman -S --needed libnewt --noconfirm
-    fi
-
-    CHOICE=$(whiptail --title "AUR Helper Selection" \
-        --menu "Select your preferred AUR helper:" 15 60 2 \
-        "yay" "The OG, stable choice for AUR users." \
-        "paru" "The newer kid on the block with modern features." \
-        3>&1 1>&2 2>&3)
-
-    case $CHOICE in
-    yay)
-        echo "Installing yay the proper way, you impatient bastard..."
-        git clone https://aur.archlinux.org/yay.git /tmp/yay
-        cd /tmp/yay
-        makepkg -si --noconfirm
-        cd -
-        AUR_HELPER="yay"
-        ;;
-    paru)
-        echo "Installing paru the proper way, you lazy shit..."
-        git clone https://aur.archlinux.org/paru.git /tmp/paru
-        cd /tmp/paru
-        makepkg -si --noconfirm
-        cd -
-        AUR_HELPER="paru"
-        ;;
-    *)
-        echo "No valid choice made. Exiting, jackass!"
-        exit 1
-        ;;
-    esac
+    echo "Select your preferred AUR helper:"
+    select CHOICE in "yay" "paru"; do
+        case $CHOICE in
+        yay)
+            echo "Installing yay the proper way, you impatient bastard..."
+            git clone https://aur.archlinux.org/yay.git /tmp/yay
+            cd /tmp/yay
+            makepkg -si --noconfirm
+            cd -
+            AUR_HELPER="yay"
+            break
+            ;;
+        paru)
+            echo "Installing paru the proper way, you lazy shit..."
+            git clone https://aur.archlinux.org/paru.git /tmp/paru
+            cd /tmp/paru
+            makepkg -si --noconfirm
+            cd -
+            AUR_HELPER="paru"
+            break
+            ;;
+        *)
+            echo "Invalid choice. Please select either 'yay' or 'paru'."
+            ;;
+        esac
+    done
 else
     AUR_HELPER=$(command_exists yay && echo "yay" || echo "paru")
 fi
@@ -95,21 +88,7 @@ if ! grep -q "\[multilib\]" /etc/pacman.conf; then
     sudo pacman -Syu --noconfirm
 fi
 
-# Step 4: Install Hyprland and extra packages
-echo "Installing Hyprland meta package and extras..."
-$AUR_HELPER -S --needed hyprland-meta-git kitty rofi-lbonn-wayland-git waybar \
-    clipse dunst wl-clipboard wl-clip-persist hyprshot otf-font-awesome uwsm qt5-wayland qt6-wayland
-
-# Enable Waybar service
-echo "Enabling waybar.service..."
-systemctl --user enable --now waybar.service
-
-# Copy basic Waybar config
-echo "Copying Waybar config..."
-mkdir -p ~/.config/waybar
-cp -r /etc/xdg/waybar/* ~/.config/waybar/
-
-# Step 5: NVIDIA setup (if applicable)
+# Step 4: NVIDIA setup (if applicable)
 if lspci | grep -i nvidia >/dev/null 2>&1; then
     echo "NVIDIA card detected. Setting up drivers and configuration..."
     $AUR_HELPER -S --needed nvidia-dkms linux-headers nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver
@@ -130,25 +109,103 @@ else
     echo "No NVIDIA card detected. Skipping NVIDIA setup, genius."
 fi
 
+
+# Step 5: Install Hyprland and extra packages
+echo "Installing Hyprland meta package and extras..."
+$AUR_HELPER -S --needed hyprland-meta-git kitty rofi-lbonn-wayland-git waybar \
+    clipse dunst wl-clipboard wl-clip-persist hyprshot otf-font-awesome uwsm qt5-wayland qt6-wayland
+
+# Step 6: Add uwsm to autostart at shell login
+# Define the code to append
+append_code='
+if uwsm check may-start && uwsm select; then
+    exec systemd-cat -t uwsm_start uwsm start default
+fi
+'
+
+# Check and append to .bashrc if it exists
+if [ -f "$HOME/.bashrc" ]; then
+    echo "$append_code" >> "$HOME/.bashrc"
+    echo ".bashrc updated successfully!"
+else
+    echo ".bashrc not found."
+fi
+
+# Check and append to .zshrc if it exists
+if [ -f "$HOME/.zshrc" ]; then
+    echo "$append_code" >> "$HOME/.zshrc"
+    echo ".zshrc updated successfully!"
+else
+    echo ".zshrc not found."
+fi
+
+# Enable Waybar service
+echo "Enabling waybar.service..."
+systemctl --user enable waybar.service
+
+# Copy basic Waybar config
+echo "Copying Waybar config..."
+mkdir -p $HOME/.config/waybar
+cp -r /etc/xdg/waybar/* $HOME/.config/waybar/
+
+
 # Step 6: Basic Hyprland config
 echo "Setting up Hyprland example config..."
-mkdir -p ~/.config/hypr
-curl -o ~/.config/hypr/hyprland.conf https://raw.githubusercontent.com/hyprwm/Hyprland/main/example/hyprland.conf
+mkdir -p $HOME/.config/hypr
+curl -o $HOME/.config/hypr/hyprland.conf https://raw.githubusercontent.com/hyprwm/Hyprland/main/example/hyprland.conf
 
 # Replace wofi with rofi in hyprland.conf
 echo "Updating hyprland.conf to use rofi..."
-sed -i 's/wofi --show drun/rofi -show drun/' ~/.config/hypr/hyprland.conf
+sed -i 's/wofi --show drun/rofi -show drun/' $HOME/.config/hypr/hyprland.conf
 
 # Add clipse and dunst to the AUTOSTART section
 echo "Adding clipse and dunst to the AUTOSTART section in hyprland.conf..."
-sed -i '/^### AUTOSTART ###$/a \
-# Autostart necessary processes (like notifications daemons, status bars, etc.)\n\
+sed -i '/^# exec-once = waybar & hyprpaper & firefox$/a \
 exec-once = clipse -listen\n\
-exec-once = dunst' ~/.config/hypr/hyprland.conf
+exec-once = dunst' $HOME/.config/hypr/hyprland.conf
 
-# Step 7: Set up Hyprlock configuration
+# Step 7: Set up Hypridle configuration
+echo "Creating Hypridle configuration..."
+bash -c "cat <<EOF > $HOME/.config/hypr/hypridle.conf
+general {
+    lock_cmd = pidof hyprlock || hyprlock       # avoid starting multiple hyprlock instances.
+    before_sleep_cmd = loginctl lock-session    # lock before suspend.
+    after_sleep_cmd = hyprctl dispatch dpms on  # to avoid having to press a key twice to turn on the display.
+}
+
+listener {
+    timeout = 150                                # 2.5min.
+    on-timeout = brightnessctl -s set 10         # set monitor backlight to minimum, avoid 0 on OLED monitor.
+    on-resume = brightnessctl -r                 # monitor backlight restore.
+}
+
+# turn off keyboard backlight, comment out this section if you dont have a keyboard backlight.
+listener { 
+    timeout = 150                                          # 2.5min.
+    on-timeout = brightnessctl -sd rgb:kbd_backlight set 0 # turn off keyboard backlight.
+    on-resume = brightnessctl -rd rgb:kbd_backlight        # turn on keyboard backlight.
+}
+
+listener {
+    timeout = 300                                 # 5min
+    on-timeout = loginctl lock-session            # lock screen when timeout has passed
+}
+
+listener {
+    timeout = 330                                 # 5.5min
+    on-timeout = hyprctl dispatch dpms off        # screen off when timeout has passed
+    on-resume = hyprctl dispatch dpms on          # screen on when activity is detected after timeout has fired.
+}
+
+listener {
+    timeout = 1800                                # 30min
+    on-timeout = systemctl suspend                # suspend pc
+}
+EOF"
+
+# Step 8: Set up Hyprlock configuration
 echo "Creating Hyprlock configuration..."
-cat <<EOF > ~/.config/hypr/hyprlock.conf
+bash -c "cat <<EOF > $HOME/.config/hypr/hyprlock.conf
 background {
     monitor =
     path = screenshot
@@ -182,16 +239,15 @@ label {
     text = \$USER
     color = rgba(200, 200, 200, 1.0)
     font_size = 25
-    font_family = Noto Sans
 
     position = 0, 80
     halign = center
     valign = center
 }
-EOF
+EOF"
 
 # Step 8: Enable Hypridle and Hyprlock services
 echo "Enabling Hypridle and Hyprlock services..."
-systemctl --user enable --now hypridle.service
+systemctl --user enable hypridle.service
 
 echo "Installation complete! Reboot and log in via uwsm, you glorious bastard!"
