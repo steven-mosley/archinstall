@@ -3,16 +3,7 @@
 # Bash script to automate Hyprland setup with all requested utilities and configurations
 # Written for the picky configuration overlord you are.
 
-# TODOS:
-# Implement sane defaults while keeping the vanilla Hyprland experience
-# - Fix uncommenting /etc/pacman.conf.
-# - Remap SUPER T to Terminal and SUPER Q to close active window
-# - Add keybinds for hyprshot
-# - Change default file manager to something not so bloated (such as Thunar)
-#     - Or maybe not include a file manager at all and leave that up to the user
-# as the whole point of this project is to simply have an easy, quick to install
-# default Hyprland experience.
-
+# Exit on error
 set -e
 
 # Function to check if a command exists
@@ -20,225 +11,163 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-# Step 0: Check for sudo and user privileges
-if ! command_exists sudo; then
-  echo "sudo is not installed. Installing it now..."
-  if command_exists pacman; then
-    su -c "pacman -S --needed sudo --noconfirm" || {
-      echo "Failed to install sudo. Run this script as root or a competent user!"
-      exit 1
-    }
-  else
-    echo "No package manager found to install sudo. You're on your own, dumbass."
-    exit 1
-  fi
-fi
+# Function to check and install dependencies
+check_dependencies() {
+  echo "Checking for dependencies..."
+  DEPENDENCIES=("git" "base-devel")
+  MISSING_PACKAGES=()
 
-if ! sudo -l >/dev/null 2>&1; then
-  echo "You don't have sudo privileges, you peasant!"
-  echo "Run this script as a user with sudo permissions or switch to a real admin account."
-  exit 1
-fi
-
-# Step 1: Check for git and base-devel
-echo "Checking for dependencies, you unprepared ..."
-MISSING_PACKAGES=()
-for package in git base-devel; do
-  if ! pacman -Qi $package &>/dev/null; then
-    MISSING_PACKAGES+=("$package")
-  fi
-done
-
-if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
-  echo "Installing missing dependencies: ${MISSING_PACKAGES[*]}..."
-  sudo pacman -S --needed "${MISSING_PACKAGES[*]}" --noconfirm
-fi
-
-# Step 2: Install or select AUR helper
-if ! command_exists yay && ! command_exists paru; then
-  echo "Neither yay nor paru found. Prompting for installation choice."
-
-  echo "Select your preferred AUR helper:"
-  select CHOICE in "yay" "paru"; do
-    case $CHOICE in
-    yay)
-      echo "Installing yay"
-      git clone https://aur.archlinux.org/yay.git /tmp/yay
-      cd /tmp/yay
-      makepkg -si --noconfirm
-      cd -
-      AUR_HELPER="yay"
-      break
-      ;;
-    paru)
-      echo "Installing paru"
-      git clone https://aur.archlinux.org/paru.git /tmp/paru
-      cd /tmp/paru
-      makepkg -si --noconfirm
-      cd -
-      AUR_HELPER="paru"
-      break
-      ;;
-    *)
-      echo "Invalid choice. Please select either 'yay' or 'paru'."
-      ;;
-    esac
+  for package in "${DEPENDENCIES[@]}"; do
+    if ! pacman -Qi "$package" &>/dev/null; then
+      MISSING_PACKAGES+=("$package")
+    else
+      echo "$package is already installed."
+    fi
   done
-else
-  AUR_HELPER=$(command_exists yay && echo "yay" || echo "paru")
-fi
 
-echo "Using AUR helper: $AUR_HELPER"
+  if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
+    echo "Installing missing dependencies: ${MISSING_PACKAGES[*]}..."
+    sudo pacman -S --needed "${MISSING_PACKAGES[@]}" --noconfirm
+  else
+    echo "All dependencies are already installed!"
+  fi
+}
 
-# Step 3: Enable multilib repo
-# Check if multilib is present but commented out
-if grep -q "^#\[multilib\]" /etc/pacman.conf; then
-  echo "Uncommenting [multilib] repo..."
-  sudo sed -i '/^\#\[multilib\]/s/^#//' /etc/pacman.conf
-  sudo sed -i '/^\#Include = \/etc\/pacman.d\/mirrorlist/s/^#//' /etc/pacman.conf
-  sudo pacman -Syu --noconfirm
-elif ! grep -q "^\[multilib\]" /etc/pacman.conf; then
-  echo "Adding [multilib] repo..."
-  echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf
-  sudo pacman -Syu --noconfirm
-else
-  echo "[multilib] repo is already enabled."
-fi
+# Function to install or select AUR helper
+aur_helper_setup() {
+  if ! command_exists yay && ! command_exists paru; then
+    echo "Neither yay nor paru found. Prompting for installation choice."
+    echo "Select your preferred AUR helper:"
+    select CHOICE in "yay" "paru"; do
+      case $CHOICE in
+      yay)
+        echo "Installing yay"
+        git clone https://aur.archlinux.org/yay.git /tmp/yay
+        cd /tmp/yay
+        makepkg -si --noconfirm
+        cd -
+        AUR_HELPER="yay"
+        break
+        ;;
+      paru)
+        echo "Installing paru"
+        git clone https://aur.archlinux.org/paru.git /tmp/paru
+        cd /tmp/paru
+        makepkg -si --noconfirm
+        cd -
+        AUR_HELPER="paru"
+        break
+        ;;
+      *)
+        echo "Invalid choice. Please select either 'yay' or 'paru'."
+        ;;
+      esac
+    done
+  else
+    AUR_HELPER=$(command_exists yay && echo "yay" || echo "paru")
+  fi
 
-# Step 4: NVIDIA setup (if applicable)
-if lspci | grep -i nvidia >/dev/null 2>&1; then
-  echo "NVIDIA card detected. Setting up drivers and configuration..."
-  $AUR_HELPER -S --needed nvidia-dkms linux-headers nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver
+  echo "Using AUR helper: $AUR_HELPER"
+}
 
-  echo "Updating /etc/mkinitcpio.conf for DRM kernel mode..."
-  sudo sed -i 's/^MODULES=.*$/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
-  sudo mkinitcpio -P
+# Function to enable multilib repo
+enable_multilib() {
+  if grep -q "^#\[multilib\]" /etc/pacman.conf; then
+    echo "Uncommenting [multilib] repo..."
+    sudo sed -i '/^#\[multilib\]/s/^#//' /etc/pacman.conf
+    sudo sed -i '/^#Include = \/etc\/pacman.d\/mirrorlist/s/^#//' /etc/pacman.conf
+    sudo pacman -Syu --noconfirm
+  elif ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+    echo "Adding [multilib] repo..."
+    echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf
+    sudo pacman -Syu --noconfirm
+  else
+    echo "[multilib] repo is already enabled."
+  fi
+}
 
-  echo "Configuring /etc/modprobe.d/nvidia.conf..."
-  sudo bash -c "cat <<EOF > /etc/modprobe.d/nvidia.conf
+# Function to set up NVIDIA drivers
+nvidia_setup() {
+  if lspci | grep -i nvidia >/dev/null 2>&1; then
+    echo "NVIDIA card detected. Performing NVIDIA configuration..."
+    $AUR_HELPER -S --needed nvidia-dkms linux-headers nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver
+    sudo sed -i 's/^MODULES=.*$/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
+    sudo tee /etc/modprobe.d/nvidia.conf >/dev/null <<EOF
 options nvidia_drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
-EOF"
+EOF
 
-  echo "Enabling NVIDIA services..."
-  sudo systemctl enable nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service
-else
-  echo "No NVIDIA card detected. Skipping NVIDIA setup."
-fi
+    sudo systemctl enable nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service
 
-# Step 5: Install Hyprland and extra packages
-echo "Installing Hyprland meta package and extras..."
-$AUR_HELPER -S --needed hyprland-meta-git kitty rofi-lbonn-wayland-git waybar \
-  clipse dunst wl-clipboard wl-clip-persist hyprshot otf-font-awesome uwsm qt5-wayland qt6-wayland
+    UWSM_DIR="$HOME/.config/uwsm"
+    UWSM_ENV="$UWSM_DIR/env"
+    UWSM_ENV_HYPRLAND="$UWSM_DIR/env-hyprland"
 
-clipse='
-# Float clipse instead of tiling
-windowrulev2 = float, class:(clipse)
-windowrulev2 = size 622 652, class:(clipse)
-'
+    if [[ ! -e "$UWSM_DIR" ]]; then
+      mkdir -p "$UWSM_DIR"
+      tee "$UWSM_ENV" >/dev/null <<EOF
+export LIBVA_DRIVER_NAME=nvidia
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export NVD_BACKEND=direct
+export ELECTRON_OZONE_PLATFORM_HINT=auto
+EOF
+    fi
 
-if [ -f "$HOME/.config/hypr/hyprland.conf" ]; then
-  echo "$clipse" >>"$HOME/.config/hypr/hyprland.conf"
-  echo "Moditified hyprland.conf to float clipse."
-else
-  echo "Hyprland config not found. Skipping clipse configuration."
-fi
+  else
+    echo "No NVIDIA card detected. Skipping NVIDIA setup."
+  fi
+}
 
-if [ -f "$HOME/.config/hypr/hyprland.conf" ]; then
-  sed -i 's/$mainMod = SUPER # Sets "Windows" key as the main modifier\abind = SUPER SHIFT, V, exec, $terminal --class clipse -e clipse\' "$HOME/.config/hypr/hyprland.conf"
-  echo "Moditified hyprland.conf to bind SUPER + V to clipse."
-fi
+# Function to install Hyprland and extra packages
+install_hyprland() {
+  echo "Installing Hyprland..."
+  $AUR_HELPER -S --needed hyprland-meta-git alacritty uwsm
+}
 
-# Step 6: Add uwsm to autostart at shell login
-# Define the code to append
-append_code='
-if uwsm check may-start && uwsm select; then
-    exec systemd-cat -t uwsm_start uwsm start default
-fi
-'
+# Function to set up Hypridle
+configure_hyprland() {
+  echo "Configuring Hyprland..."
+  mkdir -p "$HOME/.config/hypr"
+  curl -o "$HOME/.config/hypr/hyprland.conf" https://raw.githubusercontent.com/hyprwm/Hyprland/main/example/hyprland.conf
+  sed -i 's/kitty/alacritty/' "$HOME/.config/hypr/hyprland.conf"
+  sed -i 's/dolphin/null/' "$HOME/.config/hypr/hyprland.conf"
+  systemctl --user enable hyprpolkitagent.service
+}
 
-# Check and append to .bashrc if it exists
-if [ -f "$HOME/.bashrc" ]; then
-  echo "$append_code" >>"$HOME/.bashrc"
-  echo ".bashrc updated successfully!"
-else
-  echo ".bashrc not found."
-fi
-
-# Check and append to .zshrc if it exists
-if [ -f "$HOME/.zshrc" ]; then
-  echo "$append_code" >>"$HOME/.zshrc"
-  echo ".zshrc updated successfully!"
-else
-  echo ".zshrc not found."
-fi
-
-# Enable Waybar service
-echo "Enabling waybar.service..."
-systemctl --user enable waybar.service
-
-# Copy basic Waybar config
-echo "Copying Waybar config..."
-mkdir -p "$HOME/.config/waybar"
-cp -r /etc/xdg/waybar/* "$HOME/.config/waybar/"
-
-# Step 6: Basic Hyprland config
-echo "Setting up Hyprland example config..."
-mkdir -p "$HOME/.config/hypr"
-curl -o "$HOME/.config/hypr/hyprland.conf" https://raw.githubusercontent.com/hyprwm/Hyprland/main/example/hyprland.conf
-
-# Replace wofi with rofi in hyprland.conf
-echo "Updating hyprland.conf to use rofi..."
-sed -i 's/wofi --show drun/rofi -show drun/' "$HOME/.config/hypr/hyprland.conf"
-
-# Add clipse and dunst to the AUTOSTART section
-echo "Adding clipse and dunst to the AUTOSTART section in hyprland.conf..."
-sed -i '/^# exec-once = waybar & hyprpaper & firefox$/a \
-exec-once = clipse -listen\n\
-exec-once = dunst' "$HOME/.config/hypr/hyprland.conf"
-
-# Step 7: Set up Hypridle configuration
-echo "Creating Hypridle configuration..."
-bash -c "cat <<EOF > $HOME/.config/hypr/hypridle.conf
+setup_powermanagement() {
+  mkdir -p "$HOME/.config/hypr"
+  tee "$HOME/.config/hypr/hypridle.conf" >/dev/null <<EOF
 general {
-    lock_cmd = pidof hyprlock || hyprlock       # avoid starting multiple hyprlock instances.
-    before_sleep_cmd = loginctl lock-session    # lock before suspend.
-    after_sleep_cmd = hyprctl dispatch dpms on  # to avoid having to press a key twice to turn on the display.
+    lock_cmd = pidof hyprlock || hyprlock
+    before_sleep_cmd = loginctl lock-session
+    after_sleep_cmd = hyprctl dispatch dpms on
 }
 
 listener {
-    timeout = 150                                # 2.5min.
-    on-timeout = brightnessctl -s set 10         # set monitor backlight to minimum, avoid 0 on OLED monitor.
-    on-resume = brightnessctl -r                 # monitor backlight restore.
-}
-
-# turn off keyboard backlight, comment out this section if you dont have a keyboard backlight.
-listener { 
-    timeout = 150                                          # 2.5min.
-    on-timeout = brightnessctl -sd rgb:kbd_backlight set 0 # turn off keyboard backlight.
-    on-resume = brightnessctl -rd rgb:kbd_backlight        # turn on keyboard backlight.
+    timeout = 150
+    on-timeout = brightnessctl -s set 10
+    on-resume = brightnessctl -r
 }
 
 listener {
-    timeout = 300                                 # 5min
-    on-timeout = loginctl lock-session            # lock screen when timeout has passed
+    timeout = 300
+    on-timeout = loginctl lock-session
 }
 
 listener {
-    timeout = 330                                 # 5.5min
-    on-timeout = hyprctl dispatch dpms off        # screen off when timeout has passed
-    on-resume = hyprctl dispatch dpms on          # screen on when activity is detected after timeout has fired.
+    timeout = 330
+    on-timeout = hyprctl dispatch dpms off
+    on-resume = hyprctl dispatch dpms on
 }
 
 listener {
-    timeout = 1800                                # 30min
-    on-timeout = systemctl suspend                # suspend pc
+    timeout = 1800
+    on-timeout = systemctl suspend
 }
-EOF"
-
-# Step 8: Set up Hyprlock configuration
-echo "Creating Hyprlock configuration..."
-bash -c "cat <<EOF > $HOME/.config/hypr/hyprlock.conf
+EOF
+  # Function to set up Hyprlock
+  mkdir -p "$HOME/.config/hypr"
+  tee "$HOME/.config/hypr/hyprlock.conf" >/dev/null <<EOF
 background {
     monitor =
     path = screenshot
@@ -251,36 +180,109 @@ input-field {
     size = 20%, 5%
     outline_thickness = 3
     inner_color = rgba(0, 0, 0, 0.0)
-
     outer_color = rgba(33ccffee) rgba(00ff99ee) 45deg
-    check_color = rgba(00ff99ee) rgba(ff6633ee) 120deg
-    fail_color = rgba(ff6633ee) rgba(ff0066ee) 40deg
-
     font_color = rgb(143, 143, 143)
-    fade_on_empty = false
-    rounding = 15
-
-    position = 0, -20
-    halign = center
-    valign = center
-
     placeholder_text = Password
 }
 
 label {
     monitor =
-    text = \$USER
+    text = $USER
     color = rgba(200, 200, 200, 1.0)
     font_size = 25
-
-    position = 0, 80
     halign = center
     valign = center
 }
-EOF"
+EOF
+  systemctl enable --user hypridle.service
+}
 
-# Step 8: Enable Hypridle and Hyprlock services
-echo "Enabling Hypridle and Hyprlock services..."
-systemctl --user enable hypridle.service
+display_hyprland_info() {
+  # Define color codes
+  bold=$(tput bold)
+  reset=$(tput sgr0)
+  green=$(tput setaf 2)
+  blue=$(tput setaf 4)
+  yellow=$(tput setaf 3)
+  cyan=$(tput setaf 6)
+  red=$(tput setaf 1)
 
-echo "Installation complete! Reboot and log in to the tty. uwsm should autostart prompting to select a compositor."
+  cat <<EOF
+  
+██╗  ██╗██╗   ██╗██████╗ ██████╗ ██╗      █████╗ ███╗   ██╗██████╗ 
+██║  ██║╚██╗ ██╔╝██╔══██╗██╔══██╗██║     ██╔══██╗████╗  ██║██╔══██╗
+███████║ ╚████╔╝ ██████╔╝██████╔╝██║     ███████║██╔██╗ ██║██║  ██║
+██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══██╗██║     ██╔══██║██║╚██╗██║██║  ██║
+██║  ██║   ██║   ██║     ██║  ██║███████╗██║  ██║██║ ╚████║██████╔╝
+╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ 
+                                                                   
+${bold}${green}Hyprland Installation Complete!${reset}
+${cyan}A minimum install has been performed with a few exceptions:${reset}
+- ${yellow}The basic Hyprland config has been modified to use Alacritty instead of Kitty.${reset}
+  ${blue}Alacritty is more lightweight and better suited for tiling desktops.${reset}
+- ${yellow}A basic config has been set up for Hypridle and Hyprlock.${reset}
+  ${blue}Power management will now lock the screen and suspend after 5 minutes by default.${reset}
+
+${bold}${green}Universal Wayland Session Manager (uwsm)${reset} has been configured to ${red}auto-start${reset} upon logging in to the tty. 
+It will prompt you to select a compositor. 
+To start using Hyprland, select the ${bold}${yellow}Hyprland${reset} option ${red}without "uwsm-managed."${reset}
+
+${bold}${cyan}You can disable this by removing the following lines from your shell configuration:${reset} ($HOME/.bashrc or $HOME/.zshrc)
+${yellow}if uwsm check may-start && uwsm select; then${reset}
+${yellow}  exec systemd-cat -t uwsm uwsm start default${reset}
+${yellow}fi${reset}
+
+${red}Be warned:${reset} ${bold}Disabling uwsm may break some functionality as this install is optimized for uwsm.${reset}
+
+${bold}${cyan}Recommended Method:${reset}
+Using ${bold}uwsm${reset} to manage Hyprland ensures proper ${green}systemctl${reset} integration for services like:
+- ${yellow}hypeidle${reset}
+- ${yellow}hyprpolkitagent${reset}
+- ${yellow}waybar${reset}
+- ${blue}...and much of the rest of the Hypr* ecosystem.${reset}
+
+${bold}${cyan}Alternative Method:${reset}
+If you prefer not to use uwsm, set these services to autostart in your ${yellow}$HOME/.config/hypr/hyprland.conf${reset} file using the ${cyan}exec-once directive.${reset}
+
+${bold}${cyan}Other Options:${reset}
+You may use a display manager (DM) such as ${yellow}SDDM${reset} or ${yellow}GDM${reset}, but ${bold}uwsm${reset} remains the recommended way to manage your Hyprland session.
+
+${bold}${green}Installed Hyprland Packages:${reset}
+EOF
+
+  # Fetch and display installed Hyprland packages
+  if ! $AUR_HELPER -Qs hyprland; then
+    echo -e "${red}No Hyprland packages detected! Something might have gone wrong during the installation.${reset}"
+  fi
+
+  cat <<EOF
+
+${bold}${cyan}Recommended Additional Packages:${reset}
+- ${yellow}App Launcher:${reset} rofi-lbonn-wayland-git
+- ${yellow}Status Bar:${reset} waybar
+- ${yellow}Clipboard Tools:${reset} clipse, wl-clipboard
+- ${yellow}Notification Daemon:${reset} dunst
+- ${yellow}Screenshot Tool:${reset} hyprshot
+- ${yellow}Wayland Libraries:${reset} qt5-wayland, qt6-wayland
+- ${yellow}Audio Server:${reset} pipewire, wireplumber
+
+${bold}${green}Next Steps:${reset}
+Reboot your system, log in to the tty, and select ${yellow}Hyprland${reset} from the ${green}uwsm prompt${reset} to start your ${cyan}Wayland journey.${reset}
+
+EOF
+}
+
+# Main function to execute all other functions
+main() {
+  check_dependencies
+  aur_helper_setup
+  enable_multilib
+  nvidia_setup
+  install_hyprland
+  configure_hyprland
+  setup_powermanagement
+  display_hyprland_info
+}
+
+# Execute the main function
+main
