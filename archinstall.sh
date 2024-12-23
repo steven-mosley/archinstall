@@ -1,145 +1,272 @@
 #!/bin/bash
 
-# Arch Installer v2.0 - Burn it down and rebuild
-# Let's make Arch sexy. Minimal and Custom installs. Flexibility, usability, and no stupid errors. Just don't fuck it up.
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root"
+  exit 1
+fi
 
-set -e
+# Install dialog if not present
+pacman-key --init
+pacman -Sy --needed --noconfirm dialog
 
-# Prerequisite packages
-packages=(
-  dialog
-  gptfdisk
-  util-linux
-  arch-install-scripts
-  btrfs-progs
-  refind
-  zram-generator
-  networkmanager
-  sudo
-  zsh
-)
+# Temporary files
+TMP_DISK=/tmp/disk_selection
+TMP_PART=/tmp/partition_selection
+TMP_METHOD=/tmp/part_method
+TMP_ERR=/tmp/error_log
+TMP_OUT=/tmp/output_log
+TMP_SUMMARY=/tmp/summary_log
 
-# Function to install packages if missing
-install_packages() {
-  for pkg in "${packages[@]}"; do
-    if ! pacman -Qi "$pkg" &> /dev/null; then
-      echo "Installing $pkg..."
-      pacman -Sy --noconfirm "$pkg"
-    fi
-  done
+# Clean up temporary files on exit
+trap 'rm -f $TMP_DISK $TMP_PART $TMP_METHOD $TMP_ERR $TMP_OUT $TMP_SUMMARY' EXIT
+
+create_disk_menu() {
+  local menu_items=()
+  while read -r line; do
+    local name size model
+    name=$(echo "$line" | awk '{print $1}')
+    size=$(echo "$line" | awk '{print $4}')
+    model=$(echo "$line" | awk '{$1=$2=$3=$4=""; print $0}' | sed 's/^ *//')
+    menu_items+=("$name" "$size - $model")
+  done < <(lsblk -d -p -n -o NAME,MAJ:MIN,RM,SIZE,MODEL | grep -v "loop")
+
+  dialog --clear --title "Disk Selection" \
+    --menu "Select disk to partition:\n(Use arrow keys and Enter to select)" \
+    20 70 10 "${menu_items[@]}" 2>"$TMP_DISK"
 }
 
-# Check if the script is run as root
-check_root() {
-  if [ "$EUID" -ne 0 ]; then
-    dialog --msgbox "Please run this script as root." 5 40
-    exit 1
-  fi
+create_partition_menu() {
+  dialog --clear --title "Partition Method" \
+    --menu "Choose partitioning method:" 15 60 4 \
+    "noob_ext4" "Automatic partitioning with ext4" \
+    "noob_btrfs" "Automatic partitioning with BTRFS" \
+    "manual" "Manual partitioning (using cfdisk)" \
+    2>"$TMP_METHOD"
 }
 
-# Check UEFI Boot
-check_uefi() {
-  if [ ! -d /sys/firmware/efi/efivars ]; then
-    dialog --msgbox "Your system is not in UEFI mode. Reboot in UEFI mode to proceed." 7 50
-    exit 1
-  fi
+do_partition() {
+  local disk=$1
+  local choice=$2
+
+  # Ensure disk is ready
+  umount -R "$disk" 2>/dev/null || true
+  swapoff "$disk"* 2>/dev/null || true
+
+  case $choice in
+  "noob_ext4")
+    # Create GPT partition table
+    parted -s "$disk" mklabel gpt
+    echo 10
+
+    # Create EFI partition (512MB)
+    parted -s "$disk" mkpart primary fat32 1MiB 513MiB
+    parted -s "$disk" set 1 esp on
+    echo 20
+
+    # Create swap (RAM size + 2GB)
+    local ram_size=$(free -m | awk '/^Mem:/{print $2}')
+    local swap_size=$((ram_size / 2))
+    parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
+    echo 30
+
+    # Create root partition (rest of disk)
+    parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
+    echo 40
+
+    sleep 1 # Give kernel time to recognize new partitions
+
+    # Format partitions (with automatic yes to prompts)
+    echo y | mkfs.fat -F32 "${disk}1"
+    echo 50
+    echo y | mkswap "${disk}2"
+    swapon "${disk}2"
+    echo 60
+    echo y | mkfs.ext4 "${disk}3"
+    echo 70
+
+    # Mount partitions
+    mount "${disk}3" /mnt
+    mkdir -p /mnt/efi
+    mount "${disk}1" /mnt/efi
+    echo 100
+    ;;
+
+  "noob_btrfs")
+    # Create GPT partition table
+    parted -s "$disk" mklabel gpt
+    echo 10
+
+    # Create EFI partition (512MB)
+    parted -s "$disk" mkpart primary fat32 1MiB 513MiB
+    parted -s "$disk" set 1 esp on
+    echo 20
+
+    # Create swap (RAM size + 2GB)
+    local ram_size=$(free -m | awk '/^Mem:/{print $2}')
+    local swap_size=$((ram_size / 2))
+    parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
+    echo 30
+
+    # Create root partition (rest of disk)
+    parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
+    echo 40
+
+    sleep 1 # Give kernel time to recognize new partitions
+
+    # Format partitions
+    local os_name=$(hostnamectl | awk -F': ' '/Operating System/{print $2}' | cut -d' ' -f1)
+    echo y | mkfs.fat -F32 "${disk}1"
+    echo 50
+    echo y | mkswap "${disk}2"
+    swapon "${disk}2"
+    echo 60
+    echo y | mkfs.btrfs -L ${os_name} -f "${disk}3"
+    echo 70
+
+    # Create and mount BTRFS subvolumes
+    mount "${disk}3" /mnt
+    btrfs subvolume create /mnt/@
+    btrfs subvolume create /mnt/@home
+    btrfs subvolume create /mnt/@pkg
+    btrfs subvolume create /mnt/@log
+    btrfs subvolume create /mnt/@snapshots
+    echo 80
+
+    umount /mnt
+    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@ "${disk}3" /mnt
+    mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
+    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@home "${disk}3" /mnt/home
+    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@pkg "${disk}3" /mnt/var/cache/pacman/pkg
+    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log "${disk}3" /mnt/var/log
+    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots "${disk}3" /mnt/.snapshots
+    mount "${disk}1" /mnt/efi
+    echo 100
+    ;;
+
+  "manual")
+    cfdisk "$disk"
+    echo 100
+    ;;
+  esac
 }
 
-# Check Internet Connection
-check_internet() {
-  if ! ping -c 1 archlinux.org &> /dev/null; then
-    dialog --msgbox "No internet connection detected. Please connect to the internet." 7 50
-    exit 1
-  fi
+install_base_system() {
+  pacstrap /mnt base linux linux-firmware 2>"$TMP_ERR" | tee -a "$TMP_OUT"
+  genfstab -U /mnt >>/mnt/etc/fstab
 }
 
-# Set Timezone and Locale
-set_timezone() {
-  available_regions=$(ls /usr/share/zoneinfo | grep -v 'posix\|right\|Etc\|SystemV\|Factory')
-  region=$(dialog --stdout --title "Select Region" --menu "Select your region:" 20 60 15 $(echo "$available_regions" | awk '{print $1, $1}'))
-  
-  if [ -z "$region" ]; then
-    dialog --msgbox "No region selected. Defaulting to UTC." 6 50
-    region="UTC"
-  fi
-  
-  available_cities=$(ls /usr/share/zoneinfo/"$region")
-  city=$(dialog --stdout --title "Select City" --menu "Select your city:" 20 60 15 $(echo "$available_cities" | awk '{print $1, $1}'))
-  if [ -z "$city" ]; then
-    dialog --msgbox "No city selected. Defaulting to UTC." 6 50
-    city="UTC"
-  fi
-  timezone="$region/$city"
-  timedatectl set-timezone "$timezone"
+configure_system() {
+  # Create temporary files for selections
+  local TMP_LOCALE=$(mktemp)
+  local TMP_HOSTNAME=$(mktemp)
+
+  # Get available locales
+  grep -E "^#[a-z]" /usr/share/i18n/SUPPORTED | cut -d' ' -f1 | sort >"$TMP_LOCALE.list"
+  local locale_items=()
+  while IFS= read -r locale; do
+    locale_items+=("$locale" "")
+  done <"$TMP_LOCALE.list"
+
+  # Let user select locale
+  dialog --clear --title "Locale Selection" \
+    --menu "Select your locale:" 20 70 10 \
+    "${locale_items[@]}" 2>"$TMP_LOCALE"
+  local selected_locale=$(cat "$TMP_LOCALE")
+
+  # Get hostname
+  dialog --clear --title "Hostname" \
+    --inputbox "Enter your system's hostname:" 8 60 "archlinux" 2>"$TMP_HOSTNAME"
+  local selected_hostname=$(cat "$TMP_HOSTNAME")
+
+  # Prompt for root password
+  local TMP_ROOT_PASSWORD=$(mktemp)
+  dialog --clear --title "Root Password" \
+    --passwordbox "Enter root password:" 8 60 2>"$TMP_ROOT_PASSWORD"
+  local root_password=$(cat "$TMP_ROOT_PASSWORD")
+
+  # Clean up temporary files
+  rm -f "$TMP_LOCALE" "$TMP_LOCALE.list" "$TMP_HOSTNAME" "$TMP_ROOT_PASSWORD"
+
+  # Pass variables into arch-chroot
+  arch-chroot /mnt /bin/bash <<EOF
+ln -sf /usr/share/zoneinfo/US/Central /etc/localtime
+hwclock --systohc
+sed -i "s/^#${selected_locale}/${selected_locale}/" /etc/locale.gen
+locale-gen
+echo "LANG=${selected_locale}" > /etc/locale.conf
+echo "${selected_hostname}" > /etc/hostname
+cat <<HOSTS > /etc/hosts
+127.0.0.1 localhost
+::1       localhost
+127.0.1.1 ${selected_hostname}.localdomain ${selected_hostname}
+HOSTS
+mkinitcpio -P
+echo -e "${root_password}\n${root_password}" | passwd
+EOF
 }
 
-# Choose Installation Type (Minimal or Custom)
-choose_install_type() {
-  install_type=$(dialog --stdout --title "Select Installation Type" --menu "Choose your installation type:" 15 70 2 \
-    "Minimal" "Quick install with defaults" \
-    "Custom" "Install with options and flexibility")
-  
-  if [ -z "$install_type" ]; then
-    dialog --msgbox "No option selected. Exiting." 5 40
-    exit 1
-  fi
+generate_summary() {
+  local start_time=$1
+  local end_time=$(date +%s)
+  local elapsed_time=$((end_time - start_time))
+  local minutes=$((elapsed_time / 60))
+  local seconds=$((elapsed_time % 60))
+
+  echo "Installation Summary" >"$TMP_SUMMARY"
+  echo "====================" >>"$TMP_SUMMARY"
+  echo "" >>"$TMP_SUMMARY"
+  echo "Packages Installed:" >>"$TMP_SUMMARY"
+  grep -oP '(?<=installing ).*' "$TMP_OUT" >>"$TMP_SUMMARY"
+  echo "" >>"$TMP_SUMMARY"
+  echo "Partitions Created:" >>"$TMP_SUMMARY"
+  lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT >>"$TMP_SUMMARY"
+  echo "" >>"$TMP_SUMMARY"
+  echo "Time Taken: ${minutes} minutes and ${seconds} seconds" >>"$TMP_SUMMARY"
+  echo "" >>"$TMP_SUMMARY"
+  echo "Installation complete. You can now reboot." >>"$TMP_SUMMARY"
 }
 
-# Partition and Disk Selection
-select_disk() {
-  disk=$(lsblk -dn -o NAME,SIZE | grep -E 'sd|nvme' | awk '{print $1, $2}' | dialog --stdout --menu "Select Disk" 20 70 15)
-  
-  if [ -z "$disk" ]; then
-    dialog --msgbox "No disk selected. Exiting." 5 40
-    exit 1
-  fi
-}
+main() {
+  create_disk_menu || exit 1
+  selected_disk=$(cat "$TMP_DISK")
 
-# Partition creation
-create_partitions() {
-  dialog --infobox "Creating partitions on $disk..." 5 50
-  # Partition logic goes here (handle both EFI and root)
-  sgdisk --zap-all "$disk"
-  # Create new partitions
-  sgdisk -n 1:0:+300M -t 1:ef00 "$disk"
-  sgdisk -n 2:0:0 -t 2:8300 "$disk"
-}
+  dialog --yesno "Warning: This will erase all data on $selected_disk. Continue?" 10 50 || exit 1
 
-# Handle Minimal Install
-minimal_install() {
-  # Default installs like base, sudo, ZSH, etc.
-  pacstrap /mnt base linux linux-firmware sudo zsh
-}
+  create_partition_menu || exit 1
+  selected_method=$(cat "$TMP_METHOD")
 
-# Handle Custom Install
-custom_install() {
-  # Ask for additional packages (btrfs, zram, etc)
-  packages=$(dialog --stdout --checklist "Select additional packages:" 15 60 5 \
-    "btrfs" "Install Btrfs" off \
-    "networkmanager" "Install NetworkManager" off \
-    "zram" "Enable ZRAM" off)
+  start_time=$(date +%s)
 
-  pacstrap /mnt base linux linux-firmware sudo zsh $packages
-}
+  (
+    do_partition "$selected_disk" "$selected_method" 2>"$TMP_ERR" || {
+      dialog --textbox "$TMP_ERR" 20 70
+      exit 1
+    }
+  ) | dialog --gauge "Partitioning and formatting disk..." 10 70 0
 
-# Main Install Function
-install_arch() {
-  check_root
-  check_uefi
-  check_internet
-  install_packages
-  choose_install_type
-  set_timezone
-  select_disk
-  create_partitions
-  
-  if [ "$install_type" == "Minimal" ]; then
-    minimal_install
+  dialog --programbox "Installing base system, this may take a while..." 20 70 < <(
+    install_base_system 2>"$TMP_ERR" | tee -a "$TMP_OUT" || {
+      dialog --textbox "$TMP_ERR" 20 70
+      exit 1
+    }
+  )
+
+  dialog --programbox "Configuring system, this may take a while..." 20 70 < <(
+    configure_system 2>"$TMP_ERR" | tee -a "$TMP_OUT" || {
+      dialog --textbox "$TMP_ERR" 20 70
+      exit 1
+    }
+  )
+
+  generate_summary "$start_time"
+
+  dialog --title "Installation Summary" --yes-label "Reboot" --no-label "Terminal" --yesno "$(cat $TMP_SUMMARY)" 20 70
+  if [[ $? -eq 0 ]]; then
+    reboot
   else
-    custom_install
+    clear
+    echo "You can now perform custom post-install operations."
   fi
-  
-  dialog --msgbox "Installation complete. Enjoy your Arch experience!" 7 50
 }
 
-install_arch
+main
