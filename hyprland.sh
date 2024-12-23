@@ -97,7 +97,24 @@ options nvidia_drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
 EOF
 
-    sudo systemctl enable nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service
+    echo "Checking for NVIDIA hibernation services..."
+    nvidia_services=("nvidia-hibernate.service" "nvidia-suspend.service" "nvidia-resume.service")
+    nvidia_service_not_enabled=()
+    for service in "${nvidia_services[@]}"; do
+      if ! systemctl is-enabled "$service" &>/dev/null; then
+        nvidia_service_not_enabled+=("$service")
+      else
+        echo "$service is already enabled."
+      fi
+    done
+
+    if [[ ${#nvidia_service_not_enabled[@]} -gt 0 ]]; then
+      echo "Found NVIDIA services not enabled."
+      echo "Enabling: ${nvidia_service_not_enabled[*]}..."
+      sudo systemctl enable "${nvidia_service_not_enabled[@]}"
+    else
+      echo "All NVIDIA services are already enabled."
+    fi
 
     UWSM_DIR="$HOME/.config/uwsm"
     UWSM_ENV="$UWSM_DIR/env"
@@ -118,7 +135,7 @@ EOF
   fi
 }
 
-# Function to install Hyprland and extra packages
+# Function to install Hyprland
 install_hyprland() {
   echo "Installing Hyprland..."
   $AUR_HELPER -S --needed hyprland-meta-git alacritty uwsm
@@ -131,7 +148,13 @@ configure_hyprland() {
   curl -o "$HOME/.config/hypr/hyprland.conf" https://raw.githubusercontent.com/hyprwm/Hyprland/main/example/hyprland.conf
   sed -i 's/kitty/alacritty/' "$HOME/.config/hypr/hyprland.conf"
   sed -i 's/dolphin/null/' "$HOME/.config/hypr/hyprland.conf"
-  systemctl --user enable hyprpolkitagent.service
+  echo "Checking to see if hyprpolkitagent.service is enabled..."
+  if ! systemctl --user is-enabled hyprpolkitagent.service; then
+    echo "Enabling hyprpolkitagent.service..."
+    systemctl --user enable hyprpolkitagent.service
+  else
+    echo "hyprpolkitagent.service is already enabled."
+  fi
 }
 
 setup_powermanagement() {
@@ -194,7 +217,14 @@ label {
     valign = center
 }
 EOF
-  systemctl enable --user hypridle.service
+
+  echo "Checking to see if hypridle.service is enabled..."
+  if ! systemctl --user is-enabled hypridle.service; then
+    echo "Enabling hypridle.service..."
+    systemctl enable --user hypridle.service
+  else
+    echo "hypridle.service is already enabled."
+  fi
 }
 
 display_hyprland_info() {
