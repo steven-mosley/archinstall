@@ -1,27 +1,28 @@
 #!/bin/bash
 
-# Requires root privileges to execute
+# Exit on error
+set -e
+
+# Ensure the script is running as root
 if [[ $EUID -ne 0 ]]; then
   echo "This script must be run as root!"
   exit 1
 fi
 
-set -e
-
-# Ensure script runs interactively (TTY fix for piping)
+# Ensure TTY is available for user input, even when piped
 if [[ ! -t 0 ]]; then
   exec </dev/tty || { echo "Unable to access TTY for user input."; exit 1; }
 fi
 
-# Variables
-SWAP_SIZE=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 2048 )) # Swap size = half of RAM in MiB
+# Swap size (half of system RAM in MiB)
+SWAP_SIZE=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 2048 ))
 
-# Function to detect disk type (SATA or NVMe)
+# Determine the correct partition suffix for NVMe/SATA
 get_partition_suffix() {
   if [[ "$1" == *"nvme"* ]]; then
-    echo "p" # NVMe uses "p" before partition numbers
+    echo "p"  # NVMe disks require a "p" suffix before the partition number
   else
-    echo ""  # SATA/SD/MMC disks use no extra suffix
+    echo ""   # Regular SATA disks don't
   fi
 }
 
@@ -36,17 +37,16 @@ select_disk() {
     echo "Invalid selection. Exiting."
     exit 1
   fi
-
   echo "Selected disk: $selected_disk"
 }
 
-# Wipe disk and create GPT partitions
+# Wipe the disk and create GPT partitions
 partition_disk() {
   local disk="$1"
   local suffix
   suffix=$(get_partition_suffix "$disk")
 
-  echo "Wiping existing partitions on $disk..."
+  echo "Wiping existing partitions and creating a new GPT partition table on $disk..."
   wipefs -a "$disk"
   parted -s "$disk" mklabel gpt
 
@@ -70,7 +70,7 @@ partition_disk() {
 # Install the base system
 install_base_system() {
   echo "Installing base system..."
-  pacstrap /mnt base linux linux-firmware systemd-resolved
+  pacstrap /mnt base linux linux-firmware dhcpcd
   genfstab -U /mnt >> /mnt/etc/fstab
 }
 
@@ -113,19 +113,28 @@ configure_system() {
   echo "Set the root password:"
   arch-chroot /mnt passwd
 
-  # Minimal network setup with systemd-resolved
-  echo "Enabling systemd-resolved for DNS resolution..."
-  arch-chroot /mnt systemctl enable systemd-resolved
+  # Enable lightweight networking with dhcpcd
+  echo "Enabling dhcpcd for minimal networking..."
+  arch-chroot /mnt systemctl enable dhcpcd
 }
 
-# Main execution flow
+# Install GRUB bootloader
+install_bootloader() {
+  echo "Installing GRUB bootloader..."
+  arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
+  arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
+  arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+# Main function to orchestrate everything
 main() {
   select_disk
   partition_disk "$selected_disk"
   install_base_system
   configure_system
+  install_bootloader
   echo "Installation complete! You can now reboot."
 }
 
-# Run the script
+# Execute the script
 main
