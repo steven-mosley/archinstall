@@ -10,7 +10,7 @@ set -e
 
 # Ensure script runs interactively (TTY fix for piping)
 if [[ ! -t 0 ]]; then
-  exec 3<>/dev/tty && cat <&3 | bash || exit
+  exec </dev/tty || { echo "Unable to access TTY for user input."; exit 1; }
 fi
 
 # Variables
