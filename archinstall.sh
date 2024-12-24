@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Arch Linux installation script with piping-to-bash compatibility.
+# Arch Linux installation script with NVMe and piping compatibility.
 # Requires root privileges.
 
 if [[ $EUID -ne 0 ]]; then
@@ -28,22 +28,15 @@ create_disk_menu() {
   fi
 }
 
-# Function to create partition menu
-create_partition_menu() {
-  echo "Partitioning Methods:" > /dev/tty
-  echo "1. Automatic partitioning with ext4" > /dev/tty
-  echo "2. Automatic partitioning with BTRFS" > /dev/tty
-  echo "3. Manual partitioning (using cfdisk)" > /dev/tty
-  prompt "Enter your choice (1-3): " partition_method
-  case $partition_method in
-    1) partition_choice="noob_ext4" ;;
-    2) partition_choice="noob_btrfs" ;;
-    3) partition_choice="manual" ;;
-    *)
-      echo "Invalid choice. Try again." > /dev/tty
-      create_partition_menu
-      ;;
-  esac
+# Function to determine partition naming
+get_partition_name() {
+  local disk=$1
+  local part_number=$2
+  if [[ "$disk" =~ nvme[0-9]n[0-9]$ ]]; then
+    echo "${disk}p${part_number}"
+  else
+    echo "${disk}${part_number}"
+  fi
 }
 
 # Function to wipe existing partitions
@@ -74,40 +67,49 @@ perform_partitioning() {
   case $choice in
   "noob_ext4")
     echo "Performing automatic partitioning with ext4..." > /dev/tty
+    local esp=$(get_partition_name "$disk" 1)
+    local swap=$(get_partition_name "$disk" 2)
+    local root=$(get_partition_name "$disk" 3)
+
     parted -s "$disk" mkpart primary fat32 1MiB 513MiB
     parted -s "$disk" set 1 esp on
     parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
     parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
-    mkfs.fat -F32 "${disk}1"
-    mkswap "${disk}2" && swapon "${disk}2"
-    mkfs.ext4 "${disk}3"
-    mount "${disk}3" /mnt
+    mkfs.fat -F32 "$esp"
+    mkswap "$swap" && swapon "$swap"
+    mkfs.ext4 "$root"
+    mount "$root" /mnt
     mkdir -p /mnt/efi
-    mount "${disk}1" /mnt/efi
+    mount "$esp" /mnt/efi
     ;;
   "noob_btrfs")
     echo "Performing automatic partitioning with BTRFS..." > /dev/tty
+    local esp=$(get_partition_name "$disk" 1)
+    local swap=$(get_partition_name "$disk" 2)
+    local root=$(get_partition_name "$disk" 3)
+
     parted -s "$disk" mkpart primary fat32 1MiB 513MiB
     parted -s "$disk" set 1 esp on
     parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
     parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
-    mkfs.fat -F32 "${disk}1"
-    mkswap "${disk}2" && swapon "${disk}2"
-    mkfs.btrfs "${disk}3"
-    mount "${disk}3" /mnt
+    mkfs.fat -F32 "$esp"
+    mkswap "$swap" && swapon "$swap"
+    mkfs.btrfs "$root"
+    mount "$root" /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@pkg
     btrfs subvolume create /mnt/@log
     btrfs subvolume create /mnt/@snapshots
     umount /mnt
-    mount -o subvol=@,compress=zstd,noatime "${disk}3" /mnt
+
+    mount -o subvol=@,compress=zstd,noatime "$root" /mnt
     mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-    mount -o subvol=@home,compress=zstd,noatime "${disk}3" /mnt/home
-    mount -o subvol=@pkg,compress=zstd,noatime "${disk}3" /mnt/var/cache/pacman/pkg
-    mount -o subvol=@log,compress=zstd,noatime "${disk}3" /mnt/var/log
-    mount -o subvol=@snapshots,compress=zstd,noatime "${disk}3" /mnt/.snapshots
-    mount "${disk}1" /mnt/efi
+    mount -o subvol=@home,compress=zstd,noatime "$root" /mnt/home
+    mount -o subvol=@pkg,compress=zstd,noatime "$root" /mnt/var/cache/pacman/pkg
+    mount -o subvol=@log,compress=zstd,noatime "$root" /mnt/var/log
+    mount -o subvol=@snapshots,compress=zstd,noatime "$root" /mnt/.snapshots
+    mount "$esp" /mnt/efi
     ;;
   "manual")
     echo "Launching cfdisk for manual partitioning..." > /dev/tty
@@ -119,8 +121,8 @@ perform_partitioning() {
 # Function to install base system
 install_base_system() {
   echo "Installing base system..." > /dev/tty
-  pacstrap /mnt base linux linux-firmware dhcpcd
-  genfstab -U /mnt >> /mnt/etc/fstab
+  pacstrap /mnt base linux linux-firmware
+  genfstab -U /mnt >>/mnt/etc/fstab
 }
 
 # Function to configure system
@@ -145,7 +147,7 @@ configure_system() {
 
   echo "$locale" > /mnt/etc/locale.gen
   arch-chroot /mnt locale-gen
-  echo "LANG=$(echo $locale | cut -d' ' -f1)" > /mnt/etc/locale.conf
+  echo "LANG=$(echo "$locale" | awk '{print $1}')" > /mnt/etc/locale.conf
 
   # Hostname configuration
   prompt "Enter your hostname: " hostname
@@ -167,19 +169,23 @@ configure_system() {
   arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
   arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
   arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+}
 
-  # Enable dhcpcd for network setup
-  echo "Enabling dhcpcd service for network..." > /dev/tty
-  arch-chroot /mnt systemctl enable dhcpcd
+# Function to set up minimal network configuration
+setup_network() {
+  echo "Setting up minimal network configuration..." > /dev/tty
+  arch-chroot /mnt pacman -S --noconfirm dhcpcd
+  arch-chroot /mnt systemctl enable dhcpcd.service
 }
 
 # Main function
 main() {
   create_disk_menu
-  create_partition_menu
   wipe_partitions
+  create_partition_menu
   perform_partitioning "$selected_disk" "$partition_choice"
   install_base_system
+  setup_network
   configure_system
   echo "Installation complete! You can now reboot." > /dev/tty
 }
