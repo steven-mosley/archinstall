@@ -6,11 +6,16 @@ This repository contains bash scripts to automate minimal Arch Linux installs.
 ---
 
 ## Features
-
+**Arch Linix**
 - **Automated Partitioning and Formatting**
-  - Creates a GPT partition table on the selected disk.
+  - Fully supports both **ext4** and **btrfs**.
   - Sets up an EFI System Partition (ESP), swap file, and a root partition.
-  - Supports subvolumes for Btrfs.
+- **Time Zone Automated**
+  - Automatically detects and sets `/etc/timezone`.
+- **Interatively sets hostname, hosts file, and locale**
+  - You will be able to interactively set your locale & hostname, which uses your set hostname to set your `/etc/hosts` file.
+- **Closely follows best practices**
+  - We've tried to use good practices when setting up the system. No hacked together solutions, follows the Arch philosophy of KISS.
 
 ## Disk Partitioning
 - **Ext4**
