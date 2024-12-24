@@ -1,89 +1,163 @@
 #!/bin/bash
 
-# Arch Linux installation script with NVMe and piping compatibility.
-# Requires root privileges.
+#===========================================================
+# Arch Linux Installation Script
+# Works on:
+#   - /dev/nvme<n>n<m>
+#   - /dev/sdX (SATA)
+#   - /dev/hdX (Legacy/IDE)
+#   - /dev/vdX (VirtIO)
+#===========================================================
 
+# Ensure script runs as root
 if [[ $EUID -ne 0 ]]; then
-  echo "This script must be run as root"
+  echo "This script must be run as root. Exiting."
   exit 1
 fi
 
+#-----------------------------------------------------------
+# Function: prompt
+#   Safely prompt user for input even if script is piped
+#-----------------------------------------------------------
 prompt() {
-  echo "$1" > /dev/tty
-  read -r "$2" < /dev/tty
+  local message="$1"
+  local varname="$2"
+  echo "$message" > /dev/tty
+  read -r "$varname" < /dev/tty
 }
 
+#-----------------------------------------------------------
+# Function: create_disk_menu
+#   Lists all non-loop, non-ROM block devices so the user
+#   can pick the correct disk for installation
+#-----------------------------------------------------------
 create_disk_menu() {
-  echo "Available Disks:" > /dev/tty
-  lsblk -d -p -n -o NAME,SIZE,MODEL | nl > /dev/tty
+  echo "Available Disks (excluding loop and CD-ROM):" > /dev/tty
+  lsblk -d -p -n -o NAME,SIZE,TYPE | \
+    grep -E "disk" | \
+    grep -v loop | \
+    nl \
+    > /dev/tty
+
   prompt "Enter the number corresponding to your disk: " disk_number
-  selected_disk=$(lsblk -d -p -n -o NAME | sed -n "${disk_number}p")
+
+  # Extract the disk name using the user's selection
+  selected_disk=$(lsblk -d -p -n -o NAME,TYPE | \
+    grep disk | \
+    grep -v loop | \
+    awk '{print $1}' | \
+    sed -n "${disk_number}p")
+
   if [[ -z "$selected_disk" ]]; then
-    echo "Invalid selection. Try again." > /dev/tty
+    echo "Invalid selection. Please try again." > /dev/tty
     create_disk_menu
   else
     echo "Selected disk: $selected_disk" > /dev/tty
   fi
 }
 
-# NEW FUNCTION:
+#-----------------------------------------------------------
+# Function: create_partition_menu
+#   Prompt user for either:
+#     - Automatic ext4 partition
+#     - Automatic BTRFS partition
+#     - Manual partitioning with cfdisk
+#-----------------------------------------------------------
 create_partition_menu() {
-  echo "Choose a partitioning scheme:" > /dev/tty
-  echo "1) noob_ext4" > /dev/tty
-  echo "2) noob_btrfs" > /dev/tty
-  echo "3) manual" > /dev/tty
-  prompt "Enter your choice [1-3]: " choice
-  case $choice in
-    1) partition_choice="noob_ext4" ;;
-    2) partition_choice="noob_btrfs" ;;
+  echo "Partitioning Scheme Options:" > /dev/tty
+  echo "1) Automatic partitioning (ext4)" > /dev/tty
+  echo "2) Automatic partitioning (BTRFS)" > /dev/tty
+  echo "3) Manual partitioning (cfdisk)" > /dev/tty
+
+  prompt "Enter your choice (1-3): " choice
+  case "$choice" in
+    1) partition_choice="auto_ext4" ;;
+    2) partition_choice="auto_btrfs" ;;
     3) partition_choice="manual" ;;
     *) 
-      echo "Invalid choice. Try again." > /dev/tty
-      create_partition_menu
-      ;;
+       echo "Invalid choice. Try again." > /dev/tty
+       create_partition_menu
+       ;;
   esac
 }
 
+#-----------------------------------------------------------
+# Function: get_partition_name
+#   For a base disk like /dev/nvme0n1, we must add 'p'
+#   for partition names, e.g. /dev/nvme0n1p1
+#   For others like /dev/sda, /dev/hda, /dev/vda,
+#   simply append the number, e.g. /dev/sda1
+#-----------------------------------------------------------
 get_partition_name() {
-  local disk=$1
-  local part_number=$2
-  if [[ "$disk" =~ nvme[0-9]n[0-9]$ ]]; then
-    echo "${disk}p${part_number}"
+  local disk="$1"
+  local part_num="$2"
+
+  # Matches /dev/nvme<number>n<number>
+  # We use + to allow for multi-digit (e.g. /dev/nvme10n1)
+  if [[ "$disk" =~ nvme[0-9]+n[0-9]+$ ]]; then
+    echo "${disk}p${part_num}"
   else
-    echo "${disk}${part_number}"
+    echo "${disk}${part_num}"
   fi
 }
 
+#-----------------------------------------------------------
+# Function: wipe_partitions
+#   Destroys existing partition table on $selected_disk,
+#   then creates a new GPT label.
+#-----------------------------------------------------------
 wipe_partitions() {
   echo "Wiping existing partitions on $selected_disk..." > /dev/tty
-  wipefs -a "$selected_disk"
-  parted -s "$selected_disk" mklabel gpt
-  echo "Existing partitions wiped, and GPT table created." > /dev/tty
-}
-
-calculate_swap_size() {
-  local ram_size
-  ram_size=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-  local swap_size=$((ram_size / 2 / 1024)) # half of RAM in MiB
-  echo "$swap_size"
-}
-
-perform_partitioning() {
-  local disk=$1
-  local choice=$2
-  local swap_size=$(calculate_swap_size)
-
-  # Unmount and swapoff to be safe
-  for p in $(lsblk -n -o NAME "$disk"); do
-    umount -R "/dev/$p" 2>/dev/null || true
-    swapoff "/dev/$p" 2>/dev/null || true
+  # Attempt to unmount anything on that disk
+  for part in $(lsblk -n -o NAME "$selected_disk"); do
+    umount -R "/dev/$part" 2>/dev/null || true
+    swapoff "/dev/$part" 2>/dev/null || true
   done
 
-  case $choice in
-    "noob_ext4")
-      echo "Performing automatic partitioning with ext4..." > /dev/tty
+  # Wipe filesystem signatures
+  wipefs -a "$selected_disk"
+
+  # Create new GPT label
+  parted -s "$selected_disk" mklabel gpt
+  echo "GPT partition table created on $selected_disk" > /dev/tty
+}
+
+#-----------------------------------------------------------
+# Function: calculate_swap_size
+#   Return swap in MiB as half the total system RAM
+#-----------------------------------------------------------
+calculate_swap_size() {
+  local ram_kB
+  ram_kB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+  # half of RAM in MiB
+  local swap_mib=$(( ram_kB / 2 / 1024 ))
+  echo "$swap_mib"
+}
+
+#-----------------------------------------------------------
+# Function: perform_partitioning
+#   Automatic or manual partitioning. 
+#   - auto_ext4 -> ESP, swap, root(ext4)
+#   - auto_btrfs -> ESP, swap, root(btrfs w/ subvolumes)
+#   - manual -> open cfdisk
+#-----------------------------------------------------------
+perform_partitioning() {
+  local disk="$1"
+  local choice="$2"
+
+  # For auto partition, we create:
+  #   p1 = EFI (fat32, 512 MiB)
+  #   p2 = swap
+  #   p3 = root
+  local swap_size
+  swap_size=$(calculate_swap_size)
+
+  case "$choice" in
+    "auto_ext4")
+      echo "Performing automatic partitioning (ext4) on $disk" > /dev/tty
+
       local esp=$(get_partition_name "$disk" 1)
-      local swap=$(get_partition_name "$disk" 2)
+      local swp=$(get_partition_name "$disk" 2)
       local root=$(get_partition_name "$disk" 3)
 
       parted -s "$disk" mkpart primary fat32 1MiB 513MiB
@@ -91,20 +165,26 @@ perform_partitioning() {
       parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
       parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
 
-      # Force kernel to see the new partition table
+      # Force kernel to re-read partitions
       partprobe "$disk"
 
+      # Format partitions
       mkfs.fat -F32 "$esp"
-      mkswap "$swap" && swapon "$swap"
+      mkswap "$swp"
+      swapon "$swp"
       mkfs.ext4 "$root"
+
+      # Mount root
       mount "$root" /mnt
       mkdir -p /mnt/efi
       mount "$esp" /mnt/efi
       ;;
-    "noob_btrfs")
-      echo "Performing automatic partitioning with BTRFS..." > /dev/tty
+    
+    "auto_btrfs")
+      echo "Performing automatic partitioning (BTRFS) on $disk" > /dev/tty
+
       local esp=$(get_partition_name "$disk" 1)
-      local swap=$(get_partition_name "$disk" 2)
+      local swp=$(get_partition_name "$disk" 2)
       local root=$(get_partition_name "$disk" 3)
 
       parted -s "$disk" mkpart primary fat32 1MiB 513MiB
@@ -115,82 +195,128 @@ perform_partitioning() {
       partprobe "$disk"
 
       mkfs.fat -F32 "$esp"
-      mkswap "$swap" && swapon "$swap"
+      mkswap "$swp"
+      swapon "$swp"
       mkfs.btrfs "$root"
-      mount "$root" /mnt
 
+      # Mount BTRFS root temporarily, create subvolumes
+      mount "$root" /mnt
       btrfs subvolume create /mnt/@
       btrfs subvolume create /mnt/@home
-      btrfs subvolume create /mnt/@pkg
       btrfs subvolume create /mnt/@log
+      btrfs subvolume create /mnt/@pkg
       btrfs subvolume create /mnt/@snapshots
       umount /mnt
 
+      # Mount subvolumes
       mount -o subvol=@,compress=zstd,noatime "$root" /mnt
-      mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
+      mkdir -p /mnt/{efi,home,var/log,var/cache/pacman/pkg,.snapshots}
       mount -o subvol=@home,compress=zstd,noatime "$root" /mnt/home
-      mount -o subvol=@pkg,compress=zstd,noatime "$root" /mnt/var/cache/pacman/pkg
       mount -o subvol=@log,compress=zstd,noatime "$root" /mnt/var/log
+      mount -o subvol=@pkg,compress=zstd,noatime "$root" /mnt/var/cache/pacman/pkg
       mount -o subvol=@snapshots,compress=zstd,noatime "$root" /mnt/.snapshots
       mount "$esp" /mnt/efi
       ;;
+    
     "manual")
-      echo "Launching cfdisk for manual partitioning..." > /dev/tty
+      echo "Launching cfdisk for manual partitioning on $disk..." > /dev/tty
       cfdisk "$disk"
+      # We won't auto-format in manual mode. The user must do it themselves,
+      # or you can prompt them after cfdisk to specify which partitions to mount.
       ;;
   esac
 }
 
+#-----------------------------------------------------------
+# Function: install_base_system
+#   Installs the minimal Arch base system into /mnt
+#   If /mnt is not mounted, it won't succeed
+#-----------------------------------------------------------
 install_base_system() {
-  echo "Installing base system..." > /dev/tty
+  if ! mountpoint -q /mnt; then
+    echo "ERROR: /mnt is not mounted. Cannot install base system." > /dev/tty
+    return 1
+  fi
+  echo "Installing base system (base, linux, linux-firmware)..." > /dev/tty
   pacstrap /mnt base linux linux-firmware
   genfstab -U /mnt >> /mnt/etc/fstab
 }
 
+#-----------------------------------------------------------
+# Function: setup_network
+#   Installs and enables dhcpcd inside chroot
+#-----------------------------------------------------------
 setup_network() {
+  if ! mountpoint -q /mnt; then
+    echo "ERROR: /mnt is not mounted. Cannot configure network." > /dev/tty
+    return 1
+  fi
   echo "Setting up minimal network configuration..." > /dev/tty
   arch-chroot /mnt pacman -S --noconfirm dhcpcd
   arch-chroot /mnt systemctl enable dhcpcd.service
 }
 
+#-----------------------------------------------------------
+# Function: configure_system
+#   - Locales
+#   - Hostname
+#   - Timezone
+#   - Root password
+#   - Bootloader (GRUB)
+#-----------------------------------------------------------
 configure_system() {
+  if ! mountpoint -q /mnt; then
+    echo "ERROR: /mnt is not mounted. Cannot configure system." > /dev/tty
+    return 1
+  fi
   echo "Configuring system..." > /dev/tty
 
-  # Predefined list of locales
-  locales=("en_US.UTF-8 UTF-8" "en_GB.UTF-8 UTF-8" "fr_FR.UTF-8 UTF-8" "de_DE.UTF-8 UTF-8")
+  # A few predefined locales
+  locales=(
+    "en_US.UTF-8 UTF-8"
+    "en_GB.UTF-8 UTF-8"
+    "fr_FR.UTF-8 UTF-8"
+    "de_DE.UTF-8 UTF-8"
+  )
+
   echo "Available Locales:" > /dev/tty
   for i in "${!locales[@]}"; do
     echo "$((i + 1)). ${locales[$i]}" > /dev/tty
   done
+
   while :; do
     prompt "Select your locale (1-${#locales[@]}): " locale_choice
     if [[ "$locale_choice" =~ ^[1-${#locales[@]}]$ ]]; then
-      locale="${locales[$((locale_choice - 1))]}"
+      selected_locale="${locales[$((locale_choice - 1))]}"
       break
     else
       echo "Invalid choice. Try again." > /dev/tty
     fi
   done
 
-  echo "$locale" > /mnt/etc/locale.gen
+  # Enable the chosen locale
+  echo "$selected_locale" > /mnt/etc/locale.gen
   arch-chroot /mnt locale-gen
-  echo "LANG=$(echo "$locale" | awk '{print $1}')" > /mnt/etc/locale.conf
+  echo "LANG=$(echo "$selected_locale" | awk '{print $1}')" > /mnt/etc/locale.conf
 
-  # Hostname configuration
-  prompt "Enter your hostname: " hostname
+  # Hostname
+  prompt "Enter your desired hostname: " hostname
   echo "$hostname" > /mnt/etc/hostname
+
+  # /etc/hosts
   {
-    echo "127.0.0.1 localhost"
-    echo "::1       localhost"
-    echo "127.0.1.1 $hostname.localdomain $hostname"
+    echo "127.0.0.1    localhost"
+    echo "::1          localhost"
+    echo "127.0.1.1    $hostname.localdomain $hostname"
   } > /mnt/etc/hosts
 
-  # Timezone configuration (auto-detect using ipapi)
-  arch-chroot /mnt ln -sf /usr/share/zoneinfo/"$(curl -s https://ipapi.co/timezone)" /etc/localtime
+  # Timezone (example: auto-detect via ipapi)
+  # Replace this with something else if you prefer a manual prompt.
+  arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$(curl -s https://ipapi.co/timezone)" /etc/localtime
   arch-chroot /mnt hwclock --systohc
 
-  # Root password setup
-  echo "Set the root password:" > /dev/tty
+  # Root password
+  echo "Set the root password (you will be prompted inside chroot):" > /dev/tty
   arch-chroot /mnt passwd
 
   # Bootloader
@@ -200,12 +326,22 @@ configure_system() {
   arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 }
 
+#-----------------------------------------------------------
+# Main
+#-----------------------------------------------------------
 main() {
   create_disk_menu
   wipe_partitions
   create_partition_menu
   perform_partitioning "$selected_disk" "$partition_choice"
-  install_base_system
+
+  # If user chose "manual" partitioning, we won't know which partitions 
+  # they created. The script *could* attempt to detect them,
+  # or we can prompt them to mount. For now, assume the user knows to:
+  #   mkfs, mount root to /mnt, etc. 
+  # If it's not mounted by now, pacstrap will fail.
+  install_base_system || exit 1
+
   setup_network
   configure_system
   echo "Installation complete! You can now reboot." > /dev/tty
