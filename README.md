@@ -1,7 +1,7 @@
 
 # Arch Install Scripts
 
-This repository contains a Bash script that automates a minimal installation of Arch Linux with Btrfs and rEFInd bootloader. It sets up a base system that boots to a terminal, allowing you to quickly get started with Arch Linux.
+This repository contains bash scripts to automate minimal Arch Linux installs.
 
 ---
 
@@ -9,9 +9,15 @@ This repository contains a Bash script that automates a minimal installation of 
 
 - **Automated Partitioning and Formatting**
   - Creates a GPT partition table on the selected disk.
-  - Sets up an EFI System Partition (ESP) and a Btrfs root partition.
-  - Configures Btrfs subvolumes for efficient system management.
+  - Sets up an EFI System Partition (ESP), swap file, and a root partition.
+  - Supports subvolumes for Btrfs.
 
+## Disk Partitioning
+- **Ext4**
+- Partitions
+  - `ESP` mounted at `/efi`
+  - `Swap` file half the size of system RAM
+  - `root` mounted at `/`
 - **Btrfs Subvolumes Configuration**
   - Subvolumes:
     - `@` mounted at `/`
@@ -19,47 +25,62 @@ This repository contains a Bash script that automates a minimal installation of 
     - `@pkg` mounted at `/var/cache/pacman/pkg`
     - `@log` mounted at `/var/log`
     - `@snapshots` mounted at `/.snapshots`
-  - Mounted with options: `noatime`, `compress=zstd`, `discard=async`, `space_cache=v2`
+    - `Swap` file  half the size of system RAM
 
 - **System Configuration**
   - Prompts for hostname.
   - Timezone setup is automatic.
   - Configures system locale and generates locales.
-  - Prompts for a root password to set.
 
+> [!WARNING]
+> It currently does not prompt to set a root password (known bug). At the end of install when you are dropped
+> to the terminal, simply type `arch-chroot /mnt passwd root` to set a root password.
+ 
 - **Bootloader Installation**
-  - Installs and configures `GRUB` bootloader.
+  - Installs and configures `GRUB` bootloader. The current configuration assumes `--efi-directory` is `/efi`.
 
 ---
 
 ## Prerequisites
 
-- **Arch Linux Installation Media**
-  - Booted into the Arch Linux installation environment from the official ISO.
+- Pacstrap
 
 - **Internet Connection**
   - A stable internet connection is required.
 
 - **UEFI Mode**
-  - System must be booted in UEFI mode.
+  - Currently only supports UEFI mode.
 
 ---
 
 ## Usage Instructions
 
-### 1. Boot the Arch Live USB and install Git
+### 1. Boot the Arch Live USB run the installer:
 ```bash
-pacman -Sy git
+curl -L https://raw.githubusercontent.com/steven-mosley/archinstall/main/archinstall.sh | bash
 ```
 
-### 2. Run the script
-```bash
-git clone https://github.com/RetroSteve0/archinstall && cd archinstall && ./archinstall.sh
-```
-
-### 3. Follow the On-Screen Prompts
-
+### 2. Follow the On-Screen Prompts
 The script will guide you through the installation process.
+
+You will be prompted for:
+- Locale
+- Hostname
+
+> [!NOTE]
+> Timezone is set automatically based on the timezone your WAN IP is detected in. If you'd like to set it manually:
+```bash
+ln -sf /usr/share/zoneinfo/Region/City /etc/localtime
+```
+
+### 3. Set root password
+> [!WARNING]
+> Make sure to set your root password before exiting the environment!
+```bash
+arch-chroot /mnt passwd root
+```
+> [!NOTE]
+> This is only a temporary workaround. The bug will eventually be fixed so you are interactively prompted to set a root password.
 
 ---
 
@@ -68,16 +89,33 @@ The script will guide you through the installation process.
 After rebooting and logging in as root:
 
 1. **Create a New User**
-   - Follow the instructions provided to create a new user and set up sudo access.
+```bash
+useradd -mG wheel username
+```
 
-2. **Install Additional Packages**
-   - Install any additional packages you need, such as desktop environments, utilities, and applications.
+2. **Set a passaword**
+```bash
+passwd username
+```
 
-3. **Configure Network (if `NetworkManager` was not installed)**
-   - Set up network connectivity if you chose not to install `NetworkManager`.
+3. **Make your user a sudoer**
+```bash
+sed -i '/^# %wheel ALL=(ALL:ALL) ALL/s/^#/ //' /etc/sudoers
+```
 
-4. **Update the System**
-   - Run `pacman -Syu` to update the system.
+4. **Install AUR helper**
+```bash
+pacman -Sy --needed base-devel git --noconfirm && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si
+```
+
+5. **Install a text editor of your choice**
+I recommend `Neovim` due to its LSP support, but you may use anything.
+```bash
+yay -S neowim-git
+```
+
+6. **Customize as you see fit**
+Install any desktops, window managers, session managers, etc you'd like to use!
 
 ---
 
