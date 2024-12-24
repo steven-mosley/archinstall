@@ -1,272 +1,180 @@
 #!/bin/bash
 
+# Bash script to automate Linux installation and configuration.
+# Requires root privileges.
+
 if [[ $EUID -ne 0 ]]; then
   echo "This script must be run as root"
   exit 1
 fi
 
-# Install dialog if not present
-pacman-key --init
-pacman -Sy --needed --noconfirm dialog
-
-# Temporary files
-TMP_DISK=/tmp/disk_selection
-TMP_PART=/tmp/partition_selection
-TMP_METHOD=/tmp/part_method
-TMP_ERR=/tmp/error_log
-TMP_OUT=/tmp/output_log
-TMP_SUMMARY=/tmp/summary_log
-
-# Clean up temporary files on exit
-trap 'rm -f $TMP_DISK $TMP_PART $TMP_METHOD $TMP_ERR $TMP_OUT $TMP_SUMMARY' EXIT
-
+# Function to create disk menu and select a disk
 create_disk_menu() {
-  local menu_items=()
-  while read -r line; do
-    local name size model
-    name=$(echo "$line" | awk '{print $1}')
-    size=$(echo "$line" | awk '{print $4}')
-    model=$(echo "$line" | awk '{$1=$2=$3=$4=""; print $0}' | sed 's/^ *//')
-    menu_items+=("$name" "$size - $model")
-  done < <(lsblk -d -p -n -o NAME,MAJ:MIN,RM,SIZE,MODEL | grep -v "loop")
+  echo "Available Disks:"
+  lsblk -d -p -n -o NAME,SIZE,MODEL | grep -Ev "loop|sr" | nl
+  read -p "Enter the number corresponding to your disk: " disk_number
+  selected_disk=$(lsblk -d -p -n -o NAME | grep -Ev "loop|sr" | sed -n "${disk_number}p")
 
-  dialog --clear --title "Disk Selection" \
-    --menu "Select disk to partition:\n(Use arrow keys and Enter to select)" \
-    20 70 10 "${menu_items[@]}" 2>"$TMP_DISK"
+  if [[ -z "$selected_disk" ]]; then
+    echo "Invalid selection. Try again."
+    create_disk_menu
+  else
+    echo "Selected disk: $selected_disk"
+  fi
 }
 
+# Function to create partition menu
 create_partition_menu() {
-  dialog --clear --title "Partition Method" \
-    --menu "Choose partitioning method:" 15 60 4 \
-    "noob_ext4" "Automatic partitioning with ext4" \
-    "noob_btrfs" "Automatic partitioning with BTRFS" \
-    "manual" "Manual partitioning (using cfdisk)" \
-    2>"$TMP_METHOD"
+  echo "Partitioning Methods:"
+  echo "1. Automatic partitioning with ext4"
+  echo "2. Automatic partitioning with BTRFS"
+  echo "3. Manual partitioning (using cfdisk)"
+  read -p "Enter your choice (1-3): " partition_method
+
+  case $partition_method in
+    1) partition_choice="noob_ext4" ;;
+    2) partition_choice="noob_btrfs" ;;
+    3) partition_choice="manual" ;;
+    *)
+      echo "Invalid choice. Try again."
+      create_partition_menu
+      ;;
+  esac
 }
 
-do_partition() {
+# Function to perform partitioning
+perform_partitioning() {
   local disk=$1
   local choice=$2
 
-  # Ensure disk is ready
-  umount -R "$disk" 2>/dev/null || true
+  umount -R "$disk"* 2>/dev/null || true
   swapoff "$disk"* 2>/dev/null || true
+
+  # Handle NVMe partition naming
+  if [[ $disk == *nvme* ]]; then
+    part1="${disk}p1"
+    part2="${disk}p2"
+    part3="${disk}p3"
+  else
+    part1="${disk}1"
+    part2="${disk}2"
+    part3="${disk}3"
+  fi
 
   case $choice in
   "noob_ext4")
-    # Create GPT partition table
+    echo "Performing automatic partitioning with ext4..."
     parted -s "$disk" mklabel gpt
-    echo 10
-
-    # Create EFI partition (512MB)
     parted -s "$disk" mkpart primary fat32 1MiB 513MiB
     parted -s "$disk" set 1 esp on
-    echo 20
+    parted -s "$disk" mkpart primary linux-swap 513MiB 4.5GiB
+    parted -s "$disk" mkpart primary ext4 4.5GiB 100%
 
-    # Create swap (RAM size + 2GB)
-    local ram_size=$(free -m | awk '/^Mem:/{print $2}')
-    local swap_size=$((ram_size / 2))
-    parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
-    echo 30
+    mkfs.fat -F32 "$part1"
+    mkswap "$part2" && swapon "$part2"
+    mkfs.ext4 "$part3"
 
-    # Create root partition (rest of disk)
-    parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
-    echo 40
-
-    sleep 1 # Give kernel time to recognize new partitions
-
-    # Format partitions (with automatic yes to prompts)
-    echo y | mkfs.fat -F32 "${disk}1"
-    echo 50
-    echo y | mkswap "${disk}2"
-    swapon "${disk}2"
-    echo 60
-    echo y | mkfs.ext4 "${disk}3"
-    echo 70
-
-    # Mount partitions
-    mount "${disk}3" /mnt
+    mount "$part3" /mnt
     mkdir -p /mnt/efi
-    mount "${disk}1" /mnt/efi
-    echo 100
+    mount "$part1" /mnt/efi
     ;;
 
   "noob_btrfs")
-    # Create GPT partition table
-    parted -s "$disk" mklabel gpt
-    echo 10
+    echo "Performing automatic partitioning with BTRFS..."
+    # Dynamic swap size calculation
+    ram_size=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    swap_size=$((ram_size / 2 / 1024)) # Convert to MiB
 
-    # Create EFI partition (512MB)
+    parted -s "$disk" mklabel gpt
     parted -s "$disk" mkpart primary fat32 1MiB 513MiB
     parted -s "$disk" set 1 esp on
-    echo 20
-
-    # Create swap (RAM size + 2GB)
-    local ram_size=$(free -m | awk '/^Mem:/{print $2}')
-    local swap_size=$((ram_size / 2))
     parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
-    echo 30
-
-    # Create root partition (rest of disk)
     parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
-    echo 40
 
-    sleep 1 # Give kernel time to recognize new partitions
+    mkfs.fat -F32 "$part1"
+    mkswap "$part2" && swapon "$part2"
+    mkfs.btrfs "$part3"
 
-    # Format partitions
-    local os_name=$(hostnamectl | awk -F': ' '/Operating System/{print $2}' | cut -d' ' -f1)
-    echo y | mkfs.fat -F32 "${disk}1"
-    echo 50
-    echo y | mkswap "${disk}2"
-    swapon "${disk}2"
-    echo 60
-    echo y | mkfs.btrfs -L ${os_name} -f "${disk}3"
-    echo 70
-
-    # Create and mount BTRFS subvolumes
-    mount "${disk}3" /mnt
+    mount "$part3" /mnt || { echo "Failed to mount root partition $part3"; exit 1; }
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@pkg
     btrfs subvolume create /mnt/@log
     btrfs subvolume create /mnt/@snapshots
-    echo 80
-
     umount /mnt
-    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@ "${disk}3" /mnt
+
+    mount -o subvol=@,compress=zstd,noatime "$part3" /mnt
     mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@home "${disk}3" /mnt/home
-    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@pkg "${disk}3" /mnt/var/cache/pacman/pkg
-    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@log "${disk}3" /mnt/var/log
-    mount -o noatime,compress=zstd,discard=async,space_cache=v2,subvol=@snapshots "${disk}3" /mnt/.snapshots
-    mount "${disk}1" /mnt/efi
-    echo 100
+    mount -o subvol=@home,compress=zstd,noatime "$part3" /mnt/home
+    mount -o subvol=@pkg,compress=zstd,noatime "$part3" /mnt/var/cache/pacman/pkg
+    mount -o subvol=@log,compress=zstd,noatime "$part3" /mnt/var/log
+    mount -o subvol=@snapshots,compress=zstd,noatime "$part3" /mnt/.snapshots
+    mount "$part1" /mnt/efi || { echo "Failed to mount EFI partition $part1"; exit 1; }
     ;;
 
   "manual")
+    echo "Launching cfdisk for manual partitioning..."
     cfdisk "$disk"
-    echo 100
     ;;
   esac
 }
 
+# Function to install base system
 install_base_system() {
-  pacstrap /mnt base linux linux-firmware 2>"$TMP_ERR" | tee -a "$TMP_OUT"
+  echo "Installing base system..."
+  pacstrap /mnt base linux linux-firmware
   genfstab -U /mnt >>/mnt/etc/fstab
 }
 
+# Function to configure system
 configure_system() {
-  # Create temporary files for selections
-  local TMP_LOCALE=$(mktemp)
-  local TMP_HOSTNAME=$(mktemp)
+  echo "Configuring system..."
 
-  # Get available locales
-  grep -E "^#[a-z]" /usr/share/i18n/SUPPORTED | cut -d' ' -f1 | sort >"$TMP_LOCALE.list"
-  local locale_items=()
-  while IFS= read -r locale; do
-    locale_items+=("$locale" "")
-  done <"$TMP_LOCALE.list"
+  locales=("en_US.UTF-8 UTF-8" "en_GB.UTF-8 UTF-8" "fr_FR.UTF-8 UTF-8" "de_DE.UTF-8 UTF-8")
+  echo "Available Locales:"
+  for i in "${!locales[@]}"; do
+    echo "$((i + 1)). ${locales[$i]}"
+  done
+  while :; do
+    read -p "Select your locale (1-${#locales[@]}): " locale_choice
+    if [[ "$locale_choice" =~ ^[1-${#locales[@]}]$ ]]; then
+      locale="${locales[$((locale_choice - 1))]}"
+      break
+    else
+      echo "Invalid choice. Try again."
+    fi
+  done
 
-  # Let user select locale
-  dialog --clear --title "Locale Selection" \
-    --menu "Select your locale:" 20 70 10 \
-    "${locale_items[@]}" 2>"$TMP_LOCALE"
-  local selected_locale=$(cat "$TMP_LOCALE")
+  echo "$locale" > /mnt/etc/locale.gen
+  arch-chroot /mnt locale-gen
+  echo "LANG=${locale%% *}" > /mnt/etc/locale.conf
 
-  # Get hostname
-  dialog --clear --title "Hostname" \
-    --inputbox "Enter your system's hostname:" 8 60 "archlinux" 2>"$TMP_HOSTNAME"
-  local selected_hostname=$(cat "$TMP_HOSTNAME")
+  read -p "Enter your hostname: " hostname
+  echo "$hostname" > /mnt/etc/hostname
+  echo "127.0.0.1 localhost" > /mnt/etc/hosts
+  echo "::1 localhost" >> /mnt/etc/hosts
+  echo "127.0.1.1 $hostname.localdomain $hostname" >> /mnt/etc/hosts
 
-  # Prompt for root password
-  local TMP_ROOT_PASSWORD=$(mktemp)
-  dialog --clear --title "Root Password" \
-    --passwordbox "Enter root password:" 8 60 2>"$TMP_ROOT_PASSWORD"
-  local root_password=$(cat "$TMP_ROOT_PASSWORD")
+  arch-chroot /mnt ln -sf /usr/share/zoneinfo/$(curl -s https://ipapi.co/timezone) /etc/localtime
+  arch-chroot /mnt hwclock --systohc
 
-  # Clean up temporary files
-  rm -f "$TMP_LOCALE" "$TMP_LOCALE.list" "$TMP_HOSTNAME" "$TMP_ROOT_PASSWORD"
+  echo "Set the root password:"
+  arch-chroot /mnt passwd
 
-  # Pass variables into arch-chroot
-  arch-chroot /mnt /bin/bash <<EOF
-ln -sf /usr/share/zoneinfo/US/Central /etc/localtime
-hwclock --systohc
-sed -i "s/^#${selected_locale}/${selected_locale}/" /etc/locale.gen
-locale-gen
-echo "LANG=${selected_locale}" > /etc/locale.conf
-echo "${selected_hostname}" > /etc/hostname
-cat <<HOSTS > /etc/hosts
-127.0.0.1 localhost
-::1       localhost
-127.0.1.1 ${selected_hostname}.localdomain ${selected_hostname}
-HOSTS
-mkinitcpio -P
-echo -e "${root_password}\n${root_password}" | passwd
-EOF
+  echo "Installing GRUB bootloader..."
+  arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
+  arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
+  arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 }
 
-generate_summary() {
-  local start_time=$1
-  local end_time=$(date +%s)
-  local elapsed_time=$((end_time - start_time))
-  local minutes=$((elapsed_time / 60))
-  local seconds=$((elapsed_time % 60))
-
-  echo "Installation Summary" >"$TMP_SUMMARY"
-  echo "====================" >>"$TMP_SUMMARY"
-  echo "" >>"$TMP_SUMMARY"
-  echo "Packages Installed:" >>"$TMP_SUMMARY"
-  grep -oP '(?<=installing ).*' "$TMP_OUT" >>"$TMP_SUMMARY"
-  echo "" >>"$TMP_SUMMARY"
-  echo "Partitions Created:" >>"$TMP_SUMMARY"
-  lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT >>"$TMP_SUMMARY"
-  echo "" >>"$TMP_SUMMARY"
-  echo "Time Taken: ${minutes} minutes and ${seconds} seconds" >>"$TMP_SUMMARY"
-  echo "" >>"$TMP_SUMMARY"
-  echo "Installation complete. You can now reboot." >>"$TMP_SUMMARY"
-}
-
+# Main function
 main() {
-  create_disk_menu || exit 1
-  selected_disk=$(cat "$TMP_DISK")
-
-  dialog --yesno "Warning: This will erase all data on $selected_disk. Continue?" 10 50 || exit 1
-
-  create_partition_menu || exit 1
-  selected_method=$(cat "$TMP_METHOD")
-
-  start_time=$(date +%s)
-
-  (
-    do_partition "$selected_disk" "$selected_method" 2>"$TMP_ERR" || {
-      dialog --textbox "$TMP_ERR" 20 70
-      exit 1
-    }
-  ) | dialog --gauge "Partitioning and formatting disk..." 10 70 0
-
-  dialog --programbox "Installing base system, this may take a while..." 20 70 < <(
-    install_base_system 2>"$TMP_ERR" | tee -a "$TMP_OUT" || {
-      dialog --textbox "$TMP_ERR" 20 70
-      exit 1
-    }
-  )
-
-  dialog --programbox "Configuring system, this may take a while..." 20 70 < <(
-    configure_system 2>"$TMP_ERR" | tee -a "$TMP_OUT" || {
-      dialog --textbox "$TMP_ERR" 20 70
-      exit 1
-    }
-  )
-
-  generate_summary "$start_time"
-
-  dialog --title "Installation Summary" --yes-label "Reboot" --no-label "Terminal" --yesno "$(cat $TMP_SUMMARY)" 20 70
-  if [[ $? -eq 0 ]]; then
-    reboot
-  else
-    clear
-    echo "You can now perform custom post-install operations."
-  fi
+  create_disk_menu
+  create_partition_menu
+  perform_partitioning "$selected_disk" "$partition_choice"
+  install_base_system
+  configure_system
+  echo "Installation complete! You can now reboot."
 }
 
 main
