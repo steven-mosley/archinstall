@@ -29,6 +29,16 @@ create_disk_menu() {
   done
 }
 
+# Function to determine partition naming scheme (sda vs nvme)
+get_partition_name() {
+  local disk=$1
+  if [[ "$disk" =~ nvme ]]; then
+    echo "${disk}p"
+  else
+    echo "${disk}"
+  fi
+}
+
 # Function to create partition menu
 create_partition_menu() {
   echo "Partitioning Methods:"
@@ -53,6 +63,7 @@ create_partition_menu() {
 perform_partitioning() {
   local disk=$1
   local choice=$2
+  local part_prefix=$(get_partition_name "$disk")
 
   # Ensure disk is ready
   umount -R "$disk"* 2>/dev/null || true
@@ -67,13 +78,13 @@ perform_partitioning() {
     parted -s "$disk" mkpart primary linux-swap 513MiB 4.5GiB
     parted -s "$disk" mkpart primary ext4 4.5GiB 100%
 
-    mkfs.fat -F32 "${disk}1"
-    mkswap "${disk}2" && swapon "${disk}2"
-    mkfs.ext4 "${disk}3"
+    mkfs.fat -F32 "${part_prefix}1"
+    mkswap "${part_prefix}2" && swapon "${part_prefix}2"
+    mkfs.ext4 "${part_prefix}3"
 
-    mount "${disk}3" /mnt
+    mount "${part_prefix}3" /mnt
     mkdir -p /mnt/efi
-    mount "${disk}1" /mnt/efi
+    mount "${part_prefix}1" /mnt/efi
     ;;
 
   "noob_btrfs")
@@ -84,11 +95,11 @@ perform_partitioning() {
     parted -s "$disk" mkpart primary linux-swap 513MiB 4.5GiB
     parted -s "$disk" mkpart primary btrfs 4.5GiB 100%
 
-    mkfs.fat -F32 "${disk}1"
-    mkswap "${disk}2" && swapon "${disk}2"
-    mkfs.btrfs "${disk}3"
+    mkfs.fat -F32 "${part_prefix}1"
+    mkswap "${part_prefix}2" && swapon "${part_prefix}2"
+    mkfs.btrfs "${part_prefix}3"
 
-    mount "${disk}3" /mnt
+    mount "${part_prefix}3" /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@pkg
@@ -96,13 +107,13 @@ perform_partitioning() {
     btrfs subvolume create /mnt/@snapshots
     umount /mnt
 
-    mount -o subvol=@,compress=zstd,noatime "${disk}3" /mnt
+    mount -o subvol=@,compress=zstd,noatime "${part_prefix}3" /mnt
     mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-    mount -o subvol=@home,compress=zstd,noatime "${disk}3" /mnt/home
-    mount -o subvol=@pkg,compress=zstd,noatime "${disk}3" /mnt/var/cache/pacman/pkg
-    mount -o subvol=@log,compress=zstd,noatime "${disk}3" /mnt/var/log
-    mount -o subvol=@snapshots,compress=zstd,noatime "${disk}3" /mnt/.snapshots
-    mount "${disk}1" /mnt/efi
+    mount -o subvol=@home,compress=zstd,noatime "${part_prefix}3" /mnt/home
+    mount -o subvol=@pkg,compress=zstd,noatime "${part_prefix}3" /mnt/var/cache/pacman/pkg
+    mount -o subvol=@log,compress=zstd,noatime "${part_prefix}3" /mnt/var/log
+    mount -o subvol=@snapshots,compress=zstd,noatime "${part_prefix}3" /mnt/.snapshots
+    mount "${part_prefix}1" /mnt/efi
     ;;
 
   "manual")
