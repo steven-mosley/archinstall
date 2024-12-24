@@ -1,8 +1,10 @@
 #!/bin/bash
 
 #===========================================================
-# Arch Linux Installation Script (Enhanced)
-# - Unmounts and disables swap on selected disk before partitioning
+# Arch Linux Installation Script
+# - Unmounts & disables swap on selected disk
+# - Wipes existing partitions and signatures thoroughly
+# - Supports ext4 or BTRFS auto partitioning and manual
 #===========================================================
 
 # Ensure script runs as root
@@ -12,7 +14,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 #-----------------------------------------------------------
-# Safely prompt user for input even if script is piped
+# Safely prompt user for input (stdout > /dev/tty)
 #-----------------------------------------------------------
 prompt() {
   local message="$1"
@@ -22,24 +24,23 @@ prompt() {
 }
 
 #-----------------------------------------------------------
-# List all non-loop, non-ROM block devices so the user
-# can pick the correct disk for installation
+# List all non-loop, non-ROM block devices for user selection
 #-----------------------------------------------------------
 create_disk_menu() {
   echo "Available Disks (excluding loop and CD-ROM):" > /dev/tty
-  lsblk -d -p -n -o NAME,SIZE,TYPE | \
-    grep -E "disk" | \
-    grep -v loop | \
-    nl \
+  lsblk -d -p -n -o NAME,SIZE,TYPE \
+    | grep -E "disk" \
+    | grep -v loop \
+    | nl \
     > /dev/tty
 
   prompt "Enter the number corresponding to your disk: " disk_number
 
-  selected_disk=$(lsblk -d -p -n -o NAME,TYPE | \
-    grep disk | \
-    grep -v loop | \
-    awk '{print $1}' | \
-    sed -n "${disk_number}p")
+  selected_disk=$(lsblk -d -p -n -o NAME,TYPE \
+    | grep disk \
+    | grep -v loop \
+    | awk '{print $1}' \
+    | sed -n "${disk_number}p")
 
   if [[ -z "$selected_disk" ]]; then
     echo "Invalid selection. Please try again." > /dev/tty
@@ -71,14 +72,14 @@ create_partition_menu() {
 }
 
 #-----------------------------------------------------------
-# Convert base disk (e.g. /dev/nvme0n1) into partition path 
-# (e.g. /dev/nvme0n1p1), or /dev/sda -> /dev/sda1, etc.
+# For a disk like /dev/nvme0n1, we must append 'p' for partition
+# For /dev/sda or /dev/vda, just append the digit
 #-----------------------------------------------------------
 get_partition_name() {
   local disk="$1"
   local part_num="$2"
 
-  # Handle NVMe (needs the trailing 'p'), else just append number
+  # Matches /dev/nvme<number>n<number>, possibly multi-digit
   if [[ "$disk" =~ nvme[0-9]+n[0-9]+$ ]]; then
     echo "${disk}p${part_num}"
   else
@@ -87,13 +88,12 @@ get_partition_name() {
 }
 
 #-----------------------------------------------------------
-# Wipe existing partitions and create a new GPT label.
-# *Also* forcibly unmounts & swapoff any partition on this disk
+# Unmount & swapoff everything on $selected_disk
+# Then wipe out partition table (GPT) on that disk
 #-----------------------------------------------------------
 wipe_partitions() {
   echo "Wiping existing partitions on $selected_disk..." > /dev/tty
 
-  # -- NEW CLEANUP STEP --
   # Unmount anything on this disk and disable swap
   for part in $(lsblk -n -o NAME "$selected_disk"); do
     if [[ -b "/dev/$part" ]]; then
@@ -102,10 +102,8 @@ wipe_partitions() {
     fi
   done
 
-  # Now destroy filesystem signatures
+  # Destroy all FS signatures, then make new GPT label
   wipefs -a "$selected_disk"
-
-  # Create fresh GPT label
   parted -s "$selected_disk" mklabel gpt
   echo "GPT partition table created on $selected_disk" > /dev/tty
 }
@@ -122,10 +120,10 @@ calculate_swap_size() {
 }
 
 #-----------------------------------------------------------
-# Automatic or manual partitioning
-#   auto_ext4  -> ESP, swap, root(ext4)
-#   auto_btrfs -> ESP, swap, root(btrfs w/ subvols)
-#   manual     -> open cfdisk
+# Automatic or manual partitioning.
+#   auto_ext4  -> (esp, swap, root ext4)
+#   auto_btrfs -> (esp, swap, root btrfs)
+#   manual     -> open cfdisk, user does everything else
 #-----------------------------------------------------------
 perform_partitioning() {
   local disk="$1"
@@ -138,6 +136,7 @@ perform_partitioning() {
     "auto_ext4")
       echo "Performing automatic partitioning (ext4) on $disk" > /dev/tty
 
+      # Partition layout
       local esp=$(get_partition_name "$disk" 1)
       local swp=$(get_partition_name "$disk" 2)
       local root=$(get_partition_name "$disk" 3)
@@ -149,11 +148,18 @@ perform_partitioning() {
 
       partprobe "$disk"
 
-      mkfs.fat -F32 "$esp"
+      # Wipe leftover signatures on each partition (just in case)
+      wipefs -a "$esp"
+      wipefs -a "$swp"
+      wipefs -a "$root"
+
+      # Format with force flags where relevant
+      mkfs.fat -F32 -I "$esp"
       mkswap "$swp"
       swapon "$swp"
-      mkfs.ext4 "$root"
+      mkfs.ext4 -F "$root"
 
+      # Mount
       mount "$root" /mnt
       mkdir -p /mnt/efi
       mount "$esp" /mnt/efi
@@ -173,12 +179,17 @@ perform_partitioning() {
 
       partprobe "$disk"
 
-      mkfs.fat -F32 "$esp"
+      # Wipe leftover signatures
+      wipefs -a "$esp"
+      wipefs -a "$swp"
+      wipefs -a "$root"
+
+      mkfs.fat -F32 -I "$esp"
       mkswap "$swp"
       swapon "$swp"
-      mkfs.btrfs "$root"
+      mkfs.btrfs -f "$root"
 
-      # Mount root temp to create subvols
+      # Create subvolumes
       mount "$root" /mnt
       btrfs subvolume create /mnt/@
       btrfs subvolume create /mnt/@home
@@ -200,13 +211,12 @@ perform_partitioning() {
     "manual")
       echo "Launching cfdisk for manual partitioning on $disk..." > /dev/tty
       cfdisk "$disk"
-      # In manual mode, user must do all mkfs, mount steps themselves.
       ;;
   esac
 }
 
 #-----------------------------------------------------------
-# Installs the minimal Arch base system into /mnt
+# Installs Arch base system into /mnt
 #-----------------------------------------------------------
 install_base_system() {
   if ! mountpoint -q /mnt; then
@@ -219,7 +229,7 @@ install_base_system() {
 }
 
 #-----------------------------------------------------------
-# Installs and enables dhcpcd inside the chroot
+# Installs & enables dhcpcd in chroot
 #-----------------------------------------------------------
 setup_network() {
   if ! mountpoint -q /mnt; then
@@ -232,8 +242,8 @@ setup_network() {
 }
 
 #-----------------------------------------------------------
-# Configure locales, hostname, timezone, root password,
-# and install GRUB bootloader
+# Configure locale, hostname, timezone, root password,
+# and GRUB bootloader
 #-----------------------------------------------------------
 configure_system() {
   if ! mountpoint -q /mnt; then
@@ -285,7 +295,7 @@ configure_system() {
   arch-chroot /mnt hwclock --systohc
 
   # Root password
-  echo "Set the root password (you will be prompted inside chroot):" > /dev/tty
+  echo "Set the root password (you will be prompted in chroot):" > /dev/tty
   arch-chroot /mnt passwd
 
   # Bootloader
@@ -304,8 +314,7 @@ main() {
   create_partition_menu
   perform_partitioning "$selected_disk" "$partition_choice"
 
-  # If user chose "manual", ensure they've formatted/mounted. 
-  # This step will fail if /mnt isn't mounted:
+  # If user used manual partitioning, they must do their own mkfs & mount
   install_base_system || exit 1
 
   setup_network
