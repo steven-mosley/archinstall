@@ -70,7 +70,7 @@ You will be prompted for:
 > [!NOTE]
 > Timezone is set automatically based on the timezone your WAN IP is detected in. If you'd like to set it manually:
 ```bash
-ln -sf /usr/share/zoneinfo/Region/City /etc/localtime
+arch-chroot /mnt ln -sf /usr/share/zoneinfo/Region/City /etc/localtime
 ```
 
 ### 3. Set root password
