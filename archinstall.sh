@@ -11,16 +11,22 @@ fi
 # Function to create disk menu and select a disk
 create_disk_menu() {
   echo "Available Disks:"
-  lsblk -d -p -n -o NAME,SIZE,MODEL | grep -Ev "loop|sr" | nl
-  read -p "Enter the number corresponding to your disk: " disk_number
-  selected_disk=$(lsblk -d -p -n -o NAME | grep -Ev "loop|sr" | sed -n "${disk_number}p")
 
-  if [[ -z "$selected_disk" ]]; then
-    echo "Invalid selection. Try again."
-    create_disk_menu
-  else
-    echo "Selected disk: $selected_disk"
-  fi
+  # Filter out unwanted devices like loop and DVD drives
+  lsblk -d -p -n -o NAME,SIZE,MODEL | grep -Ev "loop|sr" | nl
+
+  # Prompt user for selection
+  while :; do
+    read -r -p "Enter the number corresponding to your disk: " disk_number </dev/tty
+    selected_disk=$(lsblk -d -p -n -o NAME | grep -Ev "loop|sr" | sed -n "${disk_number}p")
+
+    if [[ -z "$selected_disk" ]]; then
+      echo "Invalid selection. Try again."
+    else
+      echo "Selected disk: $selected_disk"
+      break
+    fi
+  done
 }
 
 # Function to create partition menu
@@ -29,17 +35,18 @@ create_partition_menu() {
   echo "1. Automatic partitioning with ext4"
   echo "2. Automatic partitioning with BTRFS"
   echo "3. Manual partitioning (using cfdisk)"
-  read -p "Enter your choice (1-3): " partition_method
 
-  case $partition_method in
-    1) partition_choice="noob_ext4" ;;
-    2) partition_choice="noob_btrfs" ;;
-    3) partition_choice="manual" ;;
-    *)
-      echo "Invalid choice. Try again."
-      create_partition_menu
-      ;;
-  esac
+  while :; do
+    read -r -p "Enter your choice (1-3): " partition_method </dev/tty
+    case $partition_method in
+      1) partition_choice="noob_ext4"; break ;;
+      2) partition_choice="noob_btrfs"; break ;;
+      3) partition_choice="manual"; break ;;
+      *)
+        echo "Invalid choice. Try again."
+        ;;
+    esac
+  done
 }
 
 # Function to perform partitioning
@@ -47,19 +54,9 @@ perform_partitioning() {
   local disk=$1
   local choice=$2
 
+  # Ensure disk is ready
   umount -R "$disk"* 2>/dev/null || true
   swapoff "$disk"* 2>/dev/null || true
-
-  # Handle NVMe partition naming
-  if [[ $disk == *nvme* ]]; then
-    part1="${disk}p1"
-    part2="${disk}p2"
-    part3="${disk}p3"
-  else
-    part1="${disk}1"
-    part2="${disk}2"
-    part3="${disk}3"
-  fi
 
   case $choice in
   "noob_ext4")
@@ -70,32 +67,28 @@ perform_partitioning() {
     parted -s "$disk" mkpart primary linux-swap 513MiB 4.5GiB
     parted -s "$disk" mkpart primary ext4 4.5GiB 100%
 
-    mkfs.fat -F32 "$part1"
-    mkswap "$part2" && swapon "$part2"
-    mkfs.ext4 "$part3"
+    mkfs.fat -F32 "${disk}1"
+    mkswap "${disk}2" && swapon "${disk}2"
+    mkfs.ext4 "${disk}3"
 
-    mount "$part3" /mnt
+    mount "${disk}3" /mnt
     mkdir -p /mnt/efi
-    mount "$part1" /mnt/efi
+    mount "${disk}1" /mnt/efi
     ;;
 
   "noob_btrfs")
     echo "Performing automatic partitioning with BTRFS..."
-    # Dynamic swap size calculation
-    ram_size=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    swap_size=$((ram_size / 2 / 1024)) # Convert to MiB
-
     parted -s "$disk" mklabel gpt
     parted -s "$disk" mkpart primary fat32 1MiB 513MiB
     parted -s "$disk" set 1 esp on
-    parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
-    parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
+    parted -s "$disk" mkpart primary linux-swap 513MiB 4.5GiB
+    parted -s "$disk" mkpart primary btrfs 4.5GiB 100%
 
-    mkfs.fat -F32 "$part1"
-    mkswap "$part2" && swapon "$part2"
-    mkfs.btrfs "$part3"
+    mkfs.fat -F32 "${disk}1"
+    mkswap "${disk}2" && swapon "${disk}2"
+    mkfs.btrfs "${disk}3"
 
-    mount "$part3" /mnt || { echo "Failed to mount root partition $part3"; exit 1; }
+    mount "${disk}3" /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@pkg
@@ -103,13 +96,13 @@ perform_partitioning() {
     btrfs subvolume create /mnt/@snapshots
     umount /mnt
 
-    mount -o subvol=@,compress=zstd,noatime "$part3" /mnt
+    mount -o subvol=@,compress=zstd,noatime "${disk}3" /mnt
     mkdir -p /mnt/{efi,home,var/cache/pacman/pkg,var/log,.snapshots}
-    mount -o subvol=@home,compress=zstd,noatime "$part3" /mnt/home
-    mount -o subvol=@pkg,compress=zstd,noatime "$part3" /mnt/var/cache/pacman/pkg
-    mount -o subvol=@log,compress=zstd,noatime "$part3" /mnt/var/log
-    mount -o subvol=@snapshots,compress=zstd,noatime "$part3" /mnt/.snapshots
-    mount "$part1" /mnt/efi || { echo "Failed to mount EFI partition $part1"; exit 1; }
+    mount -o subvol=@home,compress=zstd,noatime "${disk}3" /mnt/home
+    mount -o subvol=@pkg,compress=zstd,noatime "${disk}3" /mnt/var/cache/pacman/pkg
+    mount -o subvol=@log,compress=zstd,noatime "${disk}3" /mnt/var/log
+    mount -o subvol=@snapshots,compress=zstd,noatime "${disk}3" /mnt/.snapshots
+    mount "${disk}1" /mnt/efi
     ;;
 
   "manual")
@@ -130,13 +123,14 @@ install_base_system() {
 configure_system() {
   echo "Configuring system..."
 
+  # Predefined list of locales
   locales=("en_US.UTF-8 UTF-8" "en_GB.UTF-8 UTF-8" "fr_FR.UTF-8 UTF-8" "de_DE.UTF-8 UTF-8")
   echo "Available Locales:"
   for i in "${!locales[@]}"; do
     echo "$((i + 1)). ${locales[$i]}"
   done
   while :; do
-    read -p "Select your locale (1-${#locales[@]}): " locale_choice
+    read -r -p "Select your locale (1-${#locales[@]}): " locale_choice </dev/tty
     if [[ "$locale_choice" =~ ^[1-${#locales[@]}]$ ]]; then
       locale="${locales[$((locale_choice - 1))]}"
       break
@@ -149,18 +143,22 @@ configure_system() {
   arch-chroot /mnt locale-gen
   echo "LANG=${locale%% *}" > /mnt/etc/locale.conf
 
-  read -p "Enter your hostname: " hostname
+  # Hostname configuration
+  read -r -p "Enter your hostname: " hostname </dev/tty
   echo "$hostname" > /mnt/etc/hostname
   echo "127.0.0.1 localhost" > /mnt/etc/hosts
   echo "::1 localhost" >> /mnt/etc/hosts
   echo "127.0.1.1 $hostname.localdomain $hostname" >> /mnt/etc/hosts
 
+  # Timezone configuration
   arch-chroot /mnt ln -sf /usr/share/zoneinfo/$(curl -s https://ipapi.co/timezone) /etc/localtime
   arch-chroot /mnt hwclock --systohc
 
+  # Root password setup
   echo "Set the root password:"
   arch-chroot /mnt passwd
 
+  # Bootloader installation
   echo "Installing GRUB bootloader..."
   arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
   arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
