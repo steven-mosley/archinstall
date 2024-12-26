@@ -227,18 +227,18 @@ EOF
 }
 
 ###############################################################################
-# 6) Install Hyprland + Extras
+# 6) Install Hyprland
 ###############################################################################
 install_hyprland() {
   echo "Installing Hyprland..."
   if [[ $AUR_HELPER == "yay" ]]; then
-    $AUR_HELPER -S --needed hyprland-meta-git alacritty uwsm rofi-lbonn-wayland-git libnewt dunst \
-      pipewire wireplumber pipewire-jack qt5-wayland qt6-wayland wl-clipboard waybar clipse hyprshot \
-      --noconfirm --removemake
+    $AUR_HELPER -S --needed hypridle hyprland hyprlock hyprpolkitagent \
+    xdg-desktop-portal-hyprland alacritty uwsm rofi-lbonn-wayland-git \
+    libnewt dunst pipewire-jack wl-clipboard hyprshot --noconfirm --removemake
   elif [[ $AUR_HELPER == "paru" ]]; then
-    $AUR_HELPER -S --needed hyprland-meta-git alacritty uwsm rofi-lbonn-wayland-git libnewt dunst \
-      pipewire wireplumber pipewire-jack qt5-wayland qt6-wayland wl-clipboard waybar clipse hyprshot \
-      --noconfirm --removemake
+    $AUR_HELPER -S --needed hypridle hyprland hyprlock hyprpolkitagent \
+    xdg-desktop-portal-hyprland alacritty uwsm rofi-lbonn-wayland-git \
+    libnewt dunst pipewire-jack wl-clipboard hyprshot --noconfirm --removemake
   else
     echo "Unsupported AUR helper: $AUR_HELPER" >&2
     exit 1
@@ -259,6 +259,7 @@ configure_hyprland() {
 
   sed -i 's/kitty/alacritty/' "$HOME/.config/hypr/hyprland.conf"
   sed -i 's/dolphin/null/' "$HOME/.config/hypr/hyprland.conf"
+  sed -n 's/\$menu = wofi --show drun/\$menu = rofi -show drun/' "$HOME/.config/hypr/hyprland.conf"
 
   if ! systemctl --user is-enabled hyprpolkitagent.service &>/dev/null; then
     echo "Enabling hyprpolkitagent.service..."
@@ -277,73 +278,6 @@ fi
 EOF
     fi
   done
-}
-
-###############################################################################
-# 8) Waybar Config
-###############################################################################
-configure_waybar() {
-  echo "Copying default Waybar config to $HOME/.config/waybar/ ..."
-  mkdir -p "$HOME/.config/waybar"
-  cp -r /etc/xdg/waybar/* "$HOME/.config/waybar/" 2>/dev/null || true
-  if ! systemctl --user is-enabled waybar.service &>/dev/null; then
-    echo "Enabling waybar.service..."
-    systemctl enable --user waybar.service
-  else
-    echo "waybar.service is already enabled."
-  fi
-}
-
-
-###############################################################################
-# 9) Clipse Config (Line-by-Line Insertion + Deduplication)
-###############################################################################
-configure_clipse() {
-  local HYPRCONF="$HOME/.config/hypr/hyprland.conf"
-  echo "Configuring Clipse in hyprland.conf..."
-
-  # We expect the mainMod line in config to be: '$mainMod = SUPER # Sets "Windows" key as main modifier'
-  local marker1='# exec-once = waybar & hyprpaper & firefox'
-  local line_clipse_listen='exec-once = clipse -listen'
-
-  local marker2='$mainMod = SUPER # Sets "Windows" key as main modifier'
-  local line_clipse_bind='bind = SUPER, V, exec, alacritty --class clipse -e clipse'
-
-  local line_rule1='windowrulev2 = float, class:(clipse)'
-  local line_rule2='windowrulev2 = size 622 652, class:(clipse)'
-
-  # 1) Insert exec-once after marker1 if not present
-  if ! grep -Fxq "$line_clipse_listen" "$HYPRCONF"; then
-    if grep -Fq "$marker1" "$HYPRCONF"; then
-      sed -i "/$marker1/a $line_clipse_listen" "$HYPRCONF"
-    else
-      echo "Marker not found, appending: $line_clipse_listen"
-      echo "$line_clipse_listen" >> "$HYPRCONF"
-    fi
-    deduplicate_line_in_file "$HYPRCONF" "$line_clipse_listen"
-  fi
-
-  # 2) Insert the Clipse bind after marker2 if not present
-  if ! grep -Fxq "$line_clipse_bind" "$HYPRCONF"; then
-    if grep -Fq "$marker2" "$HYPRCONF"; then
-      sed -i "/$marker2/a $line_clipse_bind" "$HYPRCONF"
-    else
-      echo "Marker not found, appending: $line_clipse_bind"
-      echo "$line_clipse_bind" >> "$HYPRCONF"
-    fi
-    deduplicate_line_in_file "$HYPRCONF" "$line_clipse_bind"
-  fi
-
-  # 3) Append the two window rules at the end if missing, then deduplicate
-  if ! grep -Fxq "$line_rule1" "$HYPRCONF"; then
-    echo "$line_rule1" >> "$HYPRCONF"
-    deduplicate_line_in_file "$HYPRCONF" "$line_rule1"
-  fi
-
-  if ! grep -Fxq "$line_rule2" "$HYPRCONF"; then
-    echo "$line_rule2" >> "$HYPRCONF"
-    deduplicate_line_in_file "$HYPRCONF" "$line_rule2"
-  fi
 }
 
 ###############################################################################
@@ -500,8 +434,6 @@ main() {
   nvidia_setup
   install_hyprland
   configure_hyprland
-  configure_waybar
-  configure_clipse
   configure_hyprshot_binds
   setup_powermanagement
 
