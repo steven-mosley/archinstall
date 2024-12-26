@@ -286,7 +286,14 @@ configure_waybar() {
   echo "Copying default Waybar config to $HOME/.config/waybar/ ..."
   mkdir -p "$HOME/.config/waybar"
   cp -r /etc/xdg/waybar/* "$HOME/.config/waybar/" 2>/dev/null || true
+  if ! systemctl --user is-enabled waybar.service &>/dev/null; then
+    echo "Enabling waybar.service..."
+    systemctl enable --user waybar.service
+  else
+    echo "waybar.service is already enabled."
+  fi
 }
+
 
 ###############################################################################
 # 9) Clipse Config (Line-by-Line Insertion + Deduplication)
@@ -346,49 +353,69 @@ configure_hyprshot_binds() {
   local HYPRCONF="$HOME/.config/hypr/hyprland.conf"
   echo "Configuring Hyprshot key bindings in hyprland.conf..."
 
-  local MARKER='# Move focus with mainMod + arrow keys'
+  local MARKER='bindl = , XF86AudioPrev, exec, playerctl previous'
 
-  # We use $mainMod and $shiftMod literally, no backslash
-  local LINE_WIN='bind = $mainMod, PRINT, exec, hyprshot -m window'
-  local LINE_MON='bind = , PRINT, exec, hyprshot -m output'
-  local LINE_REG='bind = $shiftMod, PRINT, exec, hyprshot -m region'
+  # Use already defined modifiers
+  local LINE_WIN="bind = , PRINT, exec, hyprshot -m window"
+  local LINE_MON="bind = $mainMod SHIFT, PRINT, exec, hyprshot -m output"
+  local LINE_REG="bind = $mainMod, PRINT, exec, hyprshot -m region"
 
-  local HYPRSHOT_BLOCK="
+  # Construct the Hyprshot block (ensure correct multiline handling)
+  local HYPRSHOT_BLOCK
+  HYPRSHOT_BLOCK=$(cat <<EOF
 # Screenshot a window
 $LINE_WIN
 # Screenshot a monitor
 $LINE_MON
 # Screenshot a region
 $LINE_REG
-"
+EOF
+)
 
-  # If $LINE_WIN is present, assume the block is already inserted
+  # Debugging: Output the generated block
+  echo "Generated Hyprshot block:"
+  echo "$HYPRSHOT_BLOCK"
+  echo "----- End of block -----"
+
+  # Check if Hyprshot block already exists
   if grep -Fxq "$LINE_WIN" "$HYPRCONF"; then
     echo "Hyprshot key bindings already exist. Skipping block insertion."
   else
-    # Insert above marker if found, else append
+    # Append the block after the specific line containing the marker
     if grep -Fq "$MARKER" "$HYPRCONF"; then
-      echo "Inserting Hyprshot block above '$MARKER'..."
-      awk -v block="$HYPRSHOT_BLOCK" -v marker="$MARKER" '
-        $0 ~ marker {
-          print block
-        }
-        { print }
-      ' "$HYPRCONF" > /tmp/hyprland.conf
-      mv /tmp/hyprland.conf "$HYPRCONF"
-    else
-      echo "Marker not found, appending Hyprshot block at the end..."
-      printf "\n%s" "$HYPRSHOT_BLOCK" >> "$HYPRCONF"
-    fi
-  fi
+      echo "Inserting Hyprshot block after '$MARKER'..."
 
-  # Deduplicate lines in the block
-  deduplicate_line_in_file "$HYPRCONF" '# Screenshot a window'
-  deduplicate_line_in_file "$HYPRCONF" "$LINE_WIN"
-  deduplicate_line_in_file "$HYPRCONF" '# Screenshot a monitor'
-  deduplicate_line_in_file "$HYPRCONF" "$LINE_MON"
-  deduplicate_line_in_file "$HYPRCONF" '# Screenshot a region'
-  deduplicate_line_in_file "$HYPRCONF" "$LINE_REG"
+      # Check if the file is writable
+      if [ ! -w "$HYPRCONF" ]; then
+        echo "Error: $HYPRCONF is not writable. Exiting..."
+        return 1
+      fi
+
+      # Append after the marker using `sed`
+      sed -i "/$MARKER/a\\
+# Hyprshot key bindings\\
+$LINE_WIN\\
+$LINE_MON\\
+$LINE_REG\\
+" "$HYPRCONF"
+
+      echo "Hyprshot block successfully inserted after '$MARKER'."
+    else
+      echo "Marker '$MARKER' not found in $HYPRCONF. Appending block at the end..."
+
+      # If the marker is not found, append at the end of the file
+      {
+        echo -e "\n# Hyprshot key bindings"
+        echo "$HYPRSHOT_BLOCK"
+      } >> "$HYPRCONF"
+
+      echo "Hyprshot block successfully appended at the end of $HYPRCONF."
+    fi
+
+    # Display the final contents of the config file
+    echo "Final contents of $HYPRCONF:"
+    cat "$HYPRCONF"
+  fi
 }
 
 ###############################################################################
@@ -483,9 +510,8 @@ main() {
 
   if pacman -Qi grub &>/dev/null; then
     echo "GRUB is installed. You may need to regenerate your GRUB configuration using:"
-    echo "  sudo grub-mkconfig -o /boot/grub/grub.cfg"
+    echo "sudo grub-mkconfig -o /boot/grub/grub.cfg"
   fi
 }
 
 main
-
