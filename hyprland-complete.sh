@@ -1,36 +1,10 @@
 #!/bin/bash
 
-# Bash script to automate a minimal Hyprland setup.
-#
-# This is meant to be a minimal, but functional Hyprland install, while keeping the vanila experience.
-# Out of the box Hyprland doesn't have a screenshot tool, clipboard manager, a status bar, or a working lock screen.
-# What this ISN'T meant to be is a "complete" DM-like experience that adds extra themes and customizations.
-# There are many great full Hyprland auto installs that accomplish that in the Hyprland wiki.
-#
-# What you'll see is still very much the default, out of the box Hyprland experience.
-# Additions include:
-# - App launcher
-# - clipboard manager
-# - notification daemon
-# - session manager
-# - status bar
-# - screenshot tool
-# - A working lock screen
-# - Working power management listeners
-# - All with default keybindings applied to $HOME/.config/hypr/hyprland.conf
-
-# Todo: Add basic fonts
-#     - `noto-fonts-lite` and `ttf-jetbrains-mono-nerd` are good candidates
-# Fix: Address issue where hyprshot keybinds aren't being properly inserted into $HOME/.config/hypr/hyprland.conf
-#     - This is likely due to the text matching logic
-# Fix: Change `wofi --list drun` to `rofi -list drun` in $HOME/.config/hypr/hyprland.conf
-# Feature: Create logic to parse monitor native resolution and replace `preferred` in `monitor = ,preferred,auto,auto` with that value
-# Todo: Add new $HOME/.config/hypr/hyprlock.conf` config
-# Todo: Add more sane default keybinds
-#     - Change terminal to $modSuper T
-#     - Change quit active to $modSuper Q
-#     - Change float window to $modSuper $modShift V
-# ...and any other QOL improvements that may come up.
+# Check if running with sudo/root permissions
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run as root (use sudo)"
+    exit 1
+fi
 
 set -e  # Exit on error
 
@@ -40,28 +14,6 @@ set -e  # Exit on error
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
-}
-
-# Deduplicate a given line in a file, leaving only the first occurrence
-deduplicate_line_in_file() {
-  local file="$1"
-  local line="$2"
-
-  # For deduplication, the line in the file must match exactly.
-  # If the config has trailing spaces or a backslash before $, it won't match.
-  awk -v needle="$line" '
-    BEGIN { found=0 }
-    {
-      if ($0 == needle) {
-        if (found == 1) {
-          # This is a duplicate occurrence, so skip printing it
-          next
-        }
-        found=1
-      }
-      print
-    }
-  ' "$file" > /tmp/dedup_temp && mv /tmp/dedup_temp "$file"
 }
 
 ###############################################################################
@@ -228,19 +180,22 @@ EOF
 # 6) Install Hyprland
 ###############################################################################
 install_hyprland() {
-  echo "Installing Hyprland..."
-  if [[ $AUR_HELPER == "yay" ]]; then
-    $AUR_HELPER -S --needed hypridle hyprland hyprlock hyprpolkitagent \
-    xdg-desktop-portal-hyprland alacritty uwsm rofi-lbonn-wayland-git \
-    libnewt dunst pipewire-jack wl-clipboard hyprshot --noconfirm --removemake
-  elif [[ $AUR_HELPER == "paru" ]]; then
-    $AUR_HELPER -S --needed hypridle hyprland hyprlock hyprpolkitagent \
-    xdg-desktop-portal-hyprland alacritty uwsm rofi-lbonn-wayland-git \
-    libnewt dunst pipewire-jack wl-clipboard hyprshot --noconfirm --removemake
+  echo "Installing core Hyprland packages..."
+  $AUR_HELPER -S --needed hyprland --noconfirm --removemake
+  
+  # Prompt the user to decide on installing extras
+  read -p "Would you like to install extras? (y/n): " install_extras
+  if [[ "$install_extras" == "y" || "$install_extras" == "Y" ]]; then
+    install_hyprland_extras
   else
-    echo "Unsupported AUR helper: $AUR_HELPER" >&2
-    exit 1
+    echo "Skipped installing extras."
   fi
+}
+
+install_hyprland_extras() {
+  $AUR_HELPER -S --needed hyprpolkitagent hypridle hyprlock hyprshot \
+  xdg-desktop-portal-hyprland xdg-user-dirs alacritty uwsm rofi-lbonn-wayland-git \
+  libnewt dunst pipewire-jack --noconfirm --removemake
 }
 
 ###############################################################################
@@ -257,7 +212,7 @@ configure_hyprland() {
 
   sed -i 's/kitty/alacritty/' "$HOME/.config/hypr/hyprland.conf"
   sed -i 's/dolphin/null/' "$HOME/.config/hypr/hyprland.conf"
-  sed -n 's/\$menu = wofi --show drun/\$menu = rofi -show drun/' "$HOME/.config/hypr/hyprland.conf"
+  sed -n 's/wofi --show drun/rofi -show drun/' "$HOME/.config/hypr/hyprland.conf"
 
   if ! systemctl --user is-enabled hyprpolkitagent.service &>/dev/null; then
     echo "Enabling hyprpolkitagent.service..."
@@ -303,11 +258,6 @@ $LINE_MON
 $LINE_REG
 EOF
 )
-
-  # Debugging: Output the generated block
-  echo "Generated Hyprshot block:"
-  echo "$HYPRSHOT_BLOCK"
-  echo "----- End of block -----"
 
   # Check if Hyprshot block already exists
   if grep -Fxq "$LINE_WIN" "$HYPRCONF"; then
@@ -363,18 +313,12 @@ general {
 }
 
 listener {
-    timeout = 150
-    on-timeout = brightnessctl -s set 10
-    on-resume = brightnessctl -r
-}
-
-listener {
-    timeout = 300
+    timeout = 600
     on-timeout = loginctl lock-session
 }
 
 listener {
-    timeout = 330
+    timeout = 630
     on-timeout = hyprctl dispatch dpms off
     on-resume = hyprctl dispatch dpms on
 }
@@ -382,34 +326,6 @@ listener {
 listener {
     timeout = 1800
     on-timeout = systemctl suspend
-}
-EOF
-
-  tee "$HOME/.config/hypr/hyprlock.conf" >/dev/null <<EOF
-background {
-    monitor =
-    path = screenshot
-    color = rgba(25, 20, 20, 1.0)
-    blur_passes = 2
-}
-
-input-field {
-    monitor =
-    size = 20%, 5%
-    outline_thickness = 3
-    inner_color = rgba(0, 0, 0, 0.0)
-    outer_color = rgba(33ccffee) rgba(00ff99ee) 45deg
-    font_color = rgb(143, 143, 143)
-    placeholder_text = Password
-}
-
-label {
-    monitor =
-    text = $USER
-    color = rgba(200, 200, 200, 1.0)
-    font_size = 25
-    halign = center
-    valign = center
 }
 EOF
 
@@ -439,8 +355,7 @@ main() {
   sudo mkinitcpio -P
 
   if pacman -Qi grub &>/dev/null; then
-    echo "GRUB is installed. You may need to regenerate your GRUB configuration using:"
-    echo "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+    grub-mkconfig -o /boot/grub/grub.cfg
   fi
 }
 
