@@ -162,18 +162,18 @@ aur_helper_setup() {
 ###############################################################################
 enable_multilib() {
 # Define the file path
-PACMAN_CONF="/etc/pacman.conf"
+  PACMAN_CONF="/etc/pacman.conf"
 
-# Check if [multilib] section exists (commented or uncommented)
-if grep -q '\[multilib\]' "$PACMAN_CONF"; then
-    # Section exists, just uncomment it
-    sed -i -e '/^#\[multilib\]/,+1 s/^#//' "$PACMAN_CONF"
-    echo "Existing multilib repository has been enabled"
-else
-    # Section doesn't exist, append it
-    echo -e "\n# If you want to run 32 bit applications on your x86_64 system,\n# enable the multilib repository.\n\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> "$PACMAN_CONF"
-    echo "Multilib repository has been added and enabled"
-fi
+  # Check if [multilib] section exists (commented or uncommented)
+  if grep -q '\[multilib\]' "$PACMAN_CONF"; then
+      # Section exists, just uncomment it
+      sed -i -e '/^#\[multilib\]/,+1 s/^#//' "$PACMAN_CONF"
+      echo "Existing multilib repository has been enabled"
+  else
+      # Section doesn't exist, append it
+      echo -e "\n# If you want to run 32 bit applications on your x86_64 system,\n# enable the multilib repository.\n\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> "$PACMAN_CONF"
+      echo "Multilib repository has been added and enabled"
+  fi
 }
 
 ###############################################################################
