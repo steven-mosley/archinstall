@@ -237,8 +237,8 @@ setup_network() {
     return 1
   fi
   echo "Setting up minimal network configuration..." > /dev/tty
-  arch-chroot /mnt pacman -S --noconfirm dhcpcd
-  arch-chroot /mnt systemctl enable dhcpcd.service
+  arch-chroot /mnt pacman -S --noconfirm networkmanager
+  arch-chroot /mnt systemctl enable NetworkManager.service
 }
 
 #-----------------------------------------------------------
