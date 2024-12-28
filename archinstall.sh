@@ -224,13 +224,26 @@ install_base_system() {
     return 1
   fi
 
+  # Prompt user if they want to use zsh
+  prompt "Do you want to use zsh as your default shell? (yes/no): " use_zsh
+
   # Check if BTRFS is chosen and include btrfs-progs
   if [[ "$partition_choice" == "auto_btrfs" ]]; then
-    echo "Installing base system (base, linux, linux-firmware, btrfs-progs)..." > /dev/tty
-    pacstrap -K /mnt base linux linux-firmware btrfs-progs
+    if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+      echo "Installing base system (base, linux, linux-firmware, btrfs-progs, zsh)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware btrfs-progs zsh
+    else
+      echo "Installing base system (base, linux, linux-firmware, btrfs-progs)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware btrfs-progs
+    fi
   else
-    echo "Installing base system (base, linux, linux-firmware)..." > /dev/tty
-    pacstrap -K /mnt base linux linux-firmware
+    if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+      echo "Installing base system (base, linux, linux-firmware, zsh)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware zsh
+    else
+      echo "Installing base system (base, linux, linux-firmware)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware
+    fi
   fi
 
   genfstab -U /mnt >> /mnt/etc/fstab
