@@ -230,21 +230,24 @@ install_base_system() {
   # Check if BTRFS is chosen and include btrfs-progs
   if [[ "$partition_choice" == "auto_btrfs" ]]; then
     if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
-      echo "Installing base system (base, linux, linux-firmware, btrfs-progs, zsh)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware btrfs-progs zsh
+      echo "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs, zsh)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware sudo btrfs-progs zsh
     else
-      echo "Installing base system (base, linux, linux-firmware, btrfs-progs)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware btrfs-progs
+      echo "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware sudo btrfs-progs
     fi
   else
     if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
-      echo "Installing base system (base, linux, linux-firmware, zsh)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware zsh
+      echo "Installing base system (base, linux, linux-firmware, sudo, zsh)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware sudo zsh
     else
-      echo "Installing base system (base, linux, linux-firmware)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware
+      echo "Installing base system (base, linux, linux-firmware, sudo)..." > /dev/tty
+      pacstrap -K /mnt base linux linux-firmware sudo
     fi
   fi
+
+  # Enable sudo for the wheel group
+  sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
 
   genfstab -U /mnt >> /mnt/etc/fstab
 }
