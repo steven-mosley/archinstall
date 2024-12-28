@@ -113,7 +113,7 @@ enable_multilib() {
   # Check if [multilib] section exists (commented or uncommented)
   if grep -q '\[multilib\]' "$PACMAN_CONF"; then
       # Section exists, just uncomment it
-      sed -i -e '/^#\[multilib\]/,+1 s/^#//' "$PACMAN_CONF"
+      sudo sed -i -e '/^#\[multilib\]/,+1 s/^#//' "$PACMAN_CONF"
       echo "Existing multilib repository has been enabled"
   else
       # Section doesn't exist, append it
@@ -131,7 +131,6 @@ nvidia_setup() {
     $AUR_HELPER -S --needed nvidia-dkms linux-headers nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver --noconfirm --removemake
 
     sudo sed -i '/^MODULES=/s/=.*/=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
-
     sudo tee /etc/modprobe.d/nvidia.conf >/dev/null <<EOF
 options nvidia_drm modeset=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
@@ -189,7 +188,7 @@ install_hyprland() {
 install_hyprland_extras() {
   $AUR_HELPER -S --needed hyprpolkitagent hypridle hyprlock hyprshot \
   xdg-desktop-portal-hyprland xdg-user-dirs alacritty uwsm rofi-lbonn-wayland-git \
-  libnewt dunst pipewire-jack --noconfirm --removemake
+  libnewt dunst pipewire-jack pipewire-pulse pipewire-alsa waybar --noconfirm --removemake
 }
 
 ###############################################################################
@@ -204,15 +203,22 @@ configure_hyprland() {
       https://raw.githubusercontent.com/hyprwm/Hyprland/main/example/hyprland.conf
   fi
 
-  sed -i 's/kitty/alacritty/' "$HOME/.config/hypr/hyprland.conf"
-  sed -i 's/dolphin/null/' "$HOME/.config/hypr/hyprland.conf"
-  sed -n 's/wofi --show drun/rofi -show drun/' "$HOME/.config/hypr/hyprland.conf"
+  sudo sed -i 's/kitty/alacritty/' "$HOME/.config/hypr/hyprland.conf"
+  sudo sed -i 's/dolphin/null/' "$HOME/.config/hypr/hyprland.conf"
+  sudo sed -i 's/wofi --show drun/rofi -show drun/' "$HOME/.config/hypr/hyprland.conf"
 
   if ! systemctl --user is-enabled hyprpolkitagent.service &>/dev/null; then
     echo "Enabling hyprpolkitagent.service..."
     systemctl --user enable hyprpolkitagent.service
   else
     echo "hyprpolkitagent.service is already enabled."
+  fi
+
+  if ! systemctl --user is-enabled waybar.service &>/dev/null; then
+    echo "Enabling waybar.service..."
+    systemctl --user enable waybar.service
+  else
+    echo "waybar.service already enabled."
   fi
 
   for shell_profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -349,7 +355,7 @@ main() {
   sudo mkinitcpio -P
 
   if pacman -Qi grub &>/dev/null; then
-    grub-mkconfig -o /boot/grub/grub.cfg
+   sudo grub-mkconfig -o /boot/grub/grub.cfg
   fi
 }
 
