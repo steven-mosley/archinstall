@@ -134,84 +134,87 @@ perform_partitioning() {
 
   case "$choice" in
     "auto_ext4")
-      echo "Performing automatic partitioning (ext4) on $disk" > /dev/tty
+        echo "Performing automatic partitioning (ext4) on $disk" > /dev/tty
 
-      # Partition layout
-      local esp=$(get_partition_name "$disk" 1)
-      local swp=$(get_partition_name "$disk" 2)
-      local root=$(get_partition_name "$disk" 3)
+        # Partition layout
+        local esp=$(get_partition_name "$disk" 1)
+        local swp=$(get_partition_name "$disk" 2)
+        local root=$(get_partition_name "$disk" 3)
 
-      parted -s "$disk" mkpart primary fat32 1MiB 513MiB
-      parted -s "$disk" set 1 esp on
-      parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
-      parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
+        parted -s "$disk" mkpart primary fat32 1MiB 513MiB
+        parted -s "$disk" set 1 esp on
+        parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
+        parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
 
-      partprobe "$disk"
+        partprobe "$disk"
 
-      # Wipe leftover signatures on each partition (just in case)
-      wipefs -a "$esp"
-      wipefs -a "$swp"
-      wipefs -a "$root"
+        # Wipe leftover signatures on each partition (just in case)
+        wipefs -a "$esp"
+        wipefs -a "$swp"
+        wipefs -a "$root"
 
-      # Format with force flags where relevant
-      mkfs.fat -F32 -I "$esp"
-      mkswap "$swp"
-      swapon "$swp"
-      mkfs.ext4 -F "$root"
+        # Format with force flags where relevant
+        mkfs.fat -F32 -I "$esp"
+        mkswap "$swp"
+        swapon "$swp"
+        mkfs.ext4 -F "$root"
 
-      # Mount
-      mount "$root" /mnt
-      mkdir -p /mnt/efi
-      mount "$esp" /mnt/efi
-      ;;
+        # Mount
+        mount "$root" /mnt
+        mkdir -p /mnt/efi
+        mount "$esp" /mnt/efi
+        ;;
     
     "auto_btrfs")
-      echo "Performing automatic partitioning (BTRFS) on $disk" > /dev/tty
+        echo "Performing automatic partitioning (BTRFS) on $disk" > /dev/tty
 
-      local esp=$(get_partition_name "$disk" 1)
-      local swp=$(get_partition_name "$disk" 2)
-      local root=$(get_partition_name "$disk" 3)
+        local esp=$(get_partition_name "$disk" 1)
+        local swp=$(get_partition_name "$disk" 2)
+        local root=$(get_partition_name "$disk" 3)
 
-      parted -s "$disk" mkpart primary fat32 1MiB 513MiB
-      parted -s "$disk" set 1 esp on
-      parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
-      parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
+        parted -s "$disk" mkpart primary fat32 1MiB 513MiB
+        parted -s "$disk" set 1 esp on
+        parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
+        parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
 
-      partprobe "$disk"
+        partprobe "$disk"
 
-      # Wipe leftover signatures
-      wipefs -a "$esp"
-      wipefs -a "$swp"
-      wipefs -a "$root"
+        # Wipe leftover signatures
+        wipefs -a "$esp"
+        wipefs -a "$swp"
+        wipefs -a "$root"
 
-      mkfs.fat -F32 -I "$esp"
-      mkswap "$swp"
-      swapon "$swp"
-      mkfs.btrfs -f "$root"
+        mkfs.fat -F32 -I "$esp"
+        mkswap "$swp"
+        swapon "$swp"
+        mkfs.btrfs -f "$root"
 
-      # Create subvolumes
-      mount "$root" /mnt
-      btrfs subvolume create /mnt/@
-      btrfs subvolume create /mnt/@home
-      btrfs subvolume create /mnt/@log
-      btrfs subvolume create /mnt/@pkg
-      btrfs subvolume create /mnt/@snapshots
-      umount /mnt
+        # Install btrfs-progs
+        pacman -Sy --noconfirm btrfs-progs
 
-      # Remount subvolumes
-      mount -o subvol=@,compress=zstd,noatime "$root" /mnt
-      mkdir -p /mnt/{efi,home,var/log,var/cache/pacman/pkg,.snapshots}
-      mount -o subvol=@home,compress=zstd,noatime "$root" /mnt/home
-      mount -o subvol=@log,compress=zstd,noatime "$root" /mnt/var/log
-      mount -o subvol=@pkg,compress=zstd,noatime "$root" /mnt/var/cache/pacman/pkg
-      mount -o subvol=@snapshots,compress=zstd,noatime "$root" /mnt/.snapshots
-      mount "$esp" /mnt/efi
-      ;;
+        # Create subvolumes
+        mount "$root" /mnt
+        btrfs subvolume create /mnt/@
+        btrfs subvolume create /mnt/@home
+        btrfs subvolume create /mnt/@log
+        btrfs subvolume create /mnt/@pkg
+        btrfs subvolume create /mnt/@snapshots
+        umount /mnt
+
+        # Remount subvolumes
+        mount -o subvol=@,compress=zstd,noatime "$root" /mnt
+        mkdir -p /mnt/{efi,home,var/log,var/cache/pacman/pkg,.snapshots}
+        mount -o subvol=@home,compress=zstd,noatime "$root" /mnt/home
+        mount -o subvol=@log,compress=zstd,noatime "$root" /mnt/var/log
+        mount -o subvol=@pkg,compress=zstd,noatime "$root" /mnt/var/cache/pacman/pkg
+        mount -o subvol=@snapshots,compress=zstd,noatime "$root" /mnt/.snapshots
+        mount "$esp" /mnt/efi
+        ;;
     
     "manual")
-      echo "Launching cfdisk for manual partitioning on $disk..." > /dev/tty
-      cfdisk "$disk"
-      ;;
+        echo "Launching cfdisk for manual partitioning on $disk..." > /dev/tty
+        cfdisk "$disk"
+        ;;
   esac
 }
 
