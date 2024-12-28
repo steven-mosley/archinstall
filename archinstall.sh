@@ -189,9 +189,6 @@ perform_partitioning() {
         swapon "$swp"
         mkfs.btrfs -f "$root"
 
-        # Install btrfs-progs
-        pacman -Sy --noconfirm btrfs-progs
-
         # Create subvolumes
         mount "$root" /mnt
         btrfs subvolume create /mnt/@
@@ -226,8 +223,16 @@ install_base_system() {
     echo "ERROR: /mnt is not mounted. Cannot install base system." > /dev/tty
     return 1
   fi
-  echo "Installing base system (base, linux, linux-firmware)..." > /dev/tty
-  pacstrap /mnt base linux linux-firmware
+
+  # Check if BTRFS is chosen and include btrfs-progs
+  if [[ "$partition_choice" == "auto_btrfs" ]]; then
+    echo "Installing base system (base, linux, linux-firmware, btrfs-progs)..." > /dev/tty
+    pacstrap -K /mnt base linux linux-firmware btrfs-progs
+  else
+    echo "Installing base system (base, linux, linux-firmware)..." > /dev/tty
+    pacstrap -K /mnt base linux linux-firmware
+  fi
+
   genfstab -U /mnt >> /mnt/etc/fstab
 }
 
