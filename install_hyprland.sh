@@ -173,22 +173,13 @@ EOF
 # 6) Install Hyprland
 ###############################################################################
 install_hyprland() {
-  echo "Installing core Hyprland packages..."
-  $AUR_HELPER -S --needed hyprland --noconfirm --removemake
-  
-  # Prompt the user to decide on installing extras
-  read -p "Would you like to install extras? (y/n): " install_extras
-  if [[ "$install_extras" == "y" || "$install_extras" == "Y" ]]; then
-    install_hyprland_extras
-  else
-    echo "Skipped installing extras."
-  fi
-}
+  packages="hyprland uwsm alacritty libnewt hypridle pipewire-jack \
+    pipewire-pulse xdg-user-dirs xdg-desktop-portal-hyprland \
+    hyprpolkitagent hyprlock hyprshot rofi-lbonn-wayland-git \
+    dunst pipewire-alsa waybar"
 
-install_hyprland_extras() {
-  $AUR_HELPER -S --needed hyprpolkitagent hypridle hyprlock hyprshot \
-  xdg-desktop-portal-hyprland xdg-user-dirs alacritty uwsm rofi-lbonn-wayland-git \
-  libnewt dunst pipewire-jack pipewire-pulse pipewire-alsa waybar --noconfirm --removemake
+  echo "Installing core Hyprland packages..."
+  $AUR_HELPER -S --needed $packages --noconfirm --removemake
 }
 
 ###############################################################################
