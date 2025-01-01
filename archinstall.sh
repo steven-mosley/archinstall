@@ -13,6 +13,54 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+readonly LOG_FILE="/var/log/archinstall.log"
+
+log() {
+    local message="$1"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] $message" | tee -a "$LOG_FILE"
+}
+
+# Error handling function
+handle_error() {
+    local exit_code=$?
+    local line_number=$1
+    log "Error on line $line_number: Command exited with status $exit_code"
+    exit $exit_code
+}
+
+# Add error trap
+trap 'handle_error ${LINENO}' ERR
+
+#-----------------------------------------------------------
+# Check Dependencies and Internet
+#-----------------------------------------------------------
+check_dependencies() {
+    local deps=("parted" "wipefs" "curl" "arch-chroot")
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            log "ERROR: Required dependency '$dep' is not installed"
+            exit 1
+        fi
+    done
+}
+
+check_internet() {
+    log "Checking internet connectivity..."
+    if ! ping -c 1 archlinux.org &>/dev/null; then
+        log "ERROR: No internet connection detected"
+        exit 1
+    fi
+}
+
+check_uefi() {
+    if [[ ! -d /sys/firmware/efi ]]; then
+        log "ERROR: System not booted in UEFI mode"
+        exit 1
+    fi
+}
+
 #-----------------------------------------------------------
 # Safely prompt user for input (stdout > /dev/tty)
 #-----------------------------------------------------------
@@ -88,6 +136,22 @@ get_partition_name() {
 }
 
 #-----------------------------------------------------------
+# Verify disk space
+#-----------------------------------------------------------
+verify_disk_space() {
+    local disk="$1"
+    local min_size=$((20 * 1024 * 1024 * 1024)) # 20GB in bytes
+    
+    local disk_size
+    disk_size=$(blockdev --getsize64 "$disk")
+    
+    if ((disk_size < min_size)); then
+        log "ERROR: Disk size (${disk_size} bytes) is too small. Minimum required: ${min_size} bytes"
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------
 # Unmount & swapoff everything on $selected_disk
 # Then wipe out partition table (GPT) on that disk
 #-----------------------------------------------------------
@@ -148,7 +212,7 @@ perform_partitioning() {
 
         partprobe "$disk"
 
-        # Wipe leftover signatures on each partition (just in case)
+        # Wipe leftover signatures on each partition
         wipefs -a "$esp"
         wipefs -a "$swp"
         wipefs -a "$root"
@@ -215,135 +279,234 @@ perform_partitioning() {
   esac
 }
 
+create_user_account() {
+    local username
+    local -a additional_groups=("wheel" "users" "storage" "power" "audio" "video" "optical")
+    
+    # Validate username
+    while true; do
+        prompt "Enter username (lowercase letters, numbers, or underscore, 3-32 chars): " username
+        
+        # Check username format
+        if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]]; then
+            log "ERROR: Invalid username format. Please try again."
+            continue
+        fi
+        
+        # Check if username is reserved
+        if grep -q "^$username:" /mnt/etc/passwd 2>/dev/null; then
+            log "ERROR: Username '$username' already exists."
+            continue
+        fi
+        
+        # Check against system reserved names
+        local reserved_names=("root" "daemon" "bin" "sys" "sync" "games" "man" "lp" "mail" "news" "uucp" "proxy" "www-data" "backup" "list" "irc" "gnats" "nobody" "systemd-network" "systemd-resolve" "messagebus" "systemd-timesync" "polkitd")
+        
+        if [[ " ${reserved_names[@]} " =~ " ${username} " ]]; then
+            log "ERROR: Username '$username' is reserved. Please choose another."
+            continue
+        fi
+        
+        break
+    done
+    
+    # Create user and set password
+    log "Creating user account..."
+    arch-chroot /mnt useradd -m -G "$(IFS=,; echo "${additional_groups[*]}")" -s /bin/bash "$username"
+    
+    log "Setting password for user $username..."
+    while ! arch-chroot /mnt passwd "$username"; do
+        log "Password setting failed. Please try again."
+    done
+
+    # Set up minimal .bashrc
+    setup_user_environment "$username"
+    
+    return 0
+}
+
+setup_user_environment() {
+    local username="$1"
+    local user_home="/home/$username"
+
+    # Create minimal .bashrc
+    cat > "/mnt$user_home/.bashrc" <<EOF
+# User's .bashrc configuration
+[[ \$- != *i* ]] && return
+
+alias grep='grep --color=auto'
+alias ip='ip -color=auto'
+
+# Set a more informative prompt
+PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+EOF
+}
+
+#-----------------------------------------------------------
+# Configure sudo access for the user
+#-----------------------------------------------------------
+configure_sudo_access() {
+    local username="$1"
+    
+    # Create sudoers.d directory if it doesn't exist
+    arch-chroot /mnt mkdir -p /etc/sudoers.d
+    
+    # Uncomment the wheel group line in the main sudoers file
+    arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+    
+    # Verify sudoers syntax
+    if ! arch-chroot /mnt visudo -c; then
+        log "ERROR: Sudo configuration syntax error detected"
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------
+# Main user setup function
+#-----------------------------------------------------------
+setup_user_accounts() {
+    log "Setting up user accounts..."
+    
+    create_user_account || {
+        log "ERROR: Failed to create user account"
+        return 1
+    }
+    
+    configure_sudo_access "$username" || {
+        log "ERROR: Failed to configure sudo access"
+        return 1
+    }
+    
+    log "User account setup completed successfully"
+    return 0
+}
+
 #-----------------------------------------------------------
 # Installs Arch base system into /mnt
 #-----------------------------------------------------------
 install_base_system() {
-  if ! mountpoint -q /mnt; then
-    echo "ERROR: /mnt is not mounted. Cannot install base system." > /dev/tty
-    return 1
-  fi
+    if ! mountpoint -q /mnt; then
+        log "ERROR: /mnt is not mounted. Cannot install base system."
+        return 1
+    }
 
-  # Prompt user if they want to use zsh
-  prompt "Do you want to use zsh as your default shell? (yes/no): " use_zsh
+    # Prompt user if they want to use zsh
+    prompt "Do you want to use zsh as your default shell? (yes/no): " use_zsh
 
-  # Check if BTRFS is chosen and include btrfs-progs
-  if [[ "$partition_choice" == "auto_btrfs" ]]; then
-    if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
-      echo "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs, zsh)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware sudo btrfs-progs zsh
+    # Check if BTRFS is chosen and include btrfs-progs
+    if [[ "$partition_choice" == "auto_btrfs" ]]; then
+        if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+            log "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs, zsh)..."
+            pacstrap -K /mnt base linux linux-firmware sudo btrfs-progs zsh
+        else
+            log "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs)..."
+            pacstrap -K /mnt base linux linux-firmware sudo btrfs-progs
+        fi
     else
-      echo "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware sudo btrfs-progs
+        if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+            log "Installing base system (base, linux, linux-firmware, sudo, zsh)..."
+            pacstrap -K /mnt base linux linux-firmware sudo zsh
+        else
+            log "Installing base system (base, linux, linux-firmware, sudo)..."
+            pacstrap -K /mnt base linux linux-firmware sudo
+        fi
     fi
-  else
-    if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
-      echo "Installing base system (base, linux, linux-firmware, sudo, zsh)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware sudo zsh
-    else
-      echo "Installing base system (base, linux, linux-firmware, sudo)..." > /dev/tty
-      pacstrap -K /mnt base linux linux-firmware sudo
-    fi
-  fi
 
-  # Enable sudo for the wheel group
-  sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
-
-  genfstab -U /mnt >> /mnt/etc/fstab
+    genfstab -U /mnt >> /mnt/etc/fstab
 }
 
 #-----------------------------------------------------------
-# Installs & enables dhcpcd in chroot
+# Setup network configuration
 #-----------------------------------------------------------
 setup_network() {
-  if ! mountpoint -q /mnt; then
-    echo "ERROR: /mnt is not mounted. Cannot configure network." > /dev/tty
-    return 1
-  fi
-  echo "Setting up minimal network configuration..." > /dev/tty
-  arch-chroot /mnt pacman -S --noconfirm networkmanager
-  arch-chroot /mnt systemctl enable NetworkManager.service
+    if ! mountpoint -q /mnt; then
+        log "ERROR: /mnt is not mounted. Cannot configure network."
+        return 1
+    }
+    log "Setting up minimal network configuration..."
+    arch-chroot /mnt pacman -S --noconfirm networkmanager
+    arch-chroot /mnt systemctl enable NetworkManager.service
 }
 
 #-----------------------------------------------------------
-# Configure locale, hostname, timezone, root password,
-# and GRUB bootloader
+# Configure system settings
 #-----------------------------------------------------------
 configure_system() {
-  if ! mountpoint -q /mnt; then
-    echo "ERROR: /mnt is not mounted. Cannot configure system." > /dev/tty
-    return 1
-  fi
-  echo "Configuring system..." > /dev/tty
+    if ! mountpoint -q /mnt; then
+        log "ERROR: /mnt is not mounted. Cannot configure system."
+        return 1
+    }
+    log "Configuring system..."
 
-  # Some predefined locales
-  locales=(
-    "en_US.UTF-8 UTF-8"
-    "en_GB.UTF-8 UTF-8"
-    "fr_FR.UTF-8 UTF-8"
-    "de_DE.UTF-8 UTF-8"
-  )
+    # Locales setup
+    locales=(
+        "en_US.UTF-8 UTF-8"
+        "en_GB.UTF-8 UTF-8"
+        "fr_FR.UTF-8 UTF-8"
+        "de_DE.UTF-8 UTF-8"
+    )
 
-  echo "Available Locales:" > /dev/tty
-  for i in "${!locales[@]}"; do
-    echo "$((i + 1)). ${locales[$i]}" > /dev/tty
-  done
+    echo "Available Locales:" > /dev/tty
+    for i in "${!locales[@]}"; do
+        echo "$((i + 1)). ${locales[$i]}" > /dev/tty
+    done
 
-  while :; do
-    prompt "Select your locale (1-${#locales[@]}): " locale_choice
-    if [[ "$locale_choice" =~ ^[1-${#locales[@]}]$ ]]; then
-      selected_locale="${locales[$((locale_choice - 1))]}"
-      break
-    else
-      echo "Invalid choice. Try again." > /dev/tty
-    fi
-  done
+    while :; do
+        prompt "Select your locale (1-${#locales[@]}): " locale_choice
+        if [[ "$locale_choice" =~ ^[1-${#locales[@]}]$ ]]; then
+            selected_locale="${locales[$((locale_choice - 1))]}"
+            break
+        else
+            log "Invalid choice. Try again."
+        fi
+    done
 
-  echo "$selected_locale" > /mnt/etc/locale.gen
-  arch-chroot /mnt locale-gen
-  echo "LANG=$(echo "$selected_locale" | awk '{print $1}')" > /mnt/etc/locale.conf
+    echo "$selected_locale" > /mnt/etc/locale.gen
+    arch-chroot /mnt locale-gen
+    echo "LANG=$(echo "$selected_locale" | awk '{print $1}')" > /mnt/etc/locale.conf
 
-  # Hostname
-  prompt "Enter your desired hostname: " hostname
-  echo "$hostname" > /mnt/etc/hostname
+    # Hostname
+    prompt "Enter your desired hostname: " hostname
+    echo "$hostname" > /mnt/etc/hostname
 
-  # /etc/hosts
-  {
-    echo "127.0.0.1    localhost"
-    echo "::1          localhost"
-    echo "127.0.1.1    $hostname.localdomain $hostname"
-  } > /mnt/etc/hosts
+    # /etc/hosts
+    {
+        echo "127.0.0.1    localhost"
+        echo "::1          localhost"
+        echo "127.0.1.1    $hostname.localdomain $hostname"
+    } > /mnt/etc/hosts
 
-  # Timezone (example using ipapi)
-  arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$(curl -s https://ipapi.co/timezone)" /etc/localtime
-  arch-chroot /mnt hwclock --systohc
+    # Timezone (using ipapi)
+    arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$(curl -s https://ipapi.co/timezone)" /etc/localtime
+    arch-chroot /mnt hwclock --systohc
 
-  # Root password
-  echo "Set the root password (you will be prompted in chroot):" > /dev/tty
-  arch-chroot /mnt passwd
+    # Root password
+    log "Set the root password (you will be prompted in chroot):"
+    arch-chroot /mnt passwd
 
-  # Bootloader
-  echo "Installing GRUB bootloader..." > /dev/tty
-  arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
-  arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
-  arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+    # Bootloader
+    log "Installing GRUB bootloader..."
+    arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
+    arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 }
 
 #-----------------------------------------------------------
 # Main
 #-----------------------------------------------------------
 main() {
-  create_disk_menu
-  wipe_partitions
-  create_partition_menu
-  perform_partitioning "$selected_disk" "$partition_choice"
+    create_disk_menu
+    wipe_partitions
+    create_partition_menu
+    perform_partitioning "$selected_disk" "$partition_choice"
 
-  # If user used manual partitioning, they must do their own mkfs & mount
-  install_base_system || exit 1
+    # If user used manual partitioning, they must do their own mkfs & mount
+    install_base_system || exit 1
 
-  setup_network
-  configure_system
-  echo "Installation complete! You can now reboot." > /dev/tty
+    setup_network
+    configure_system
+    setup_user_accounts || exit 1
+    log "Installation complete! You can now reboot."
 }
 
 main
