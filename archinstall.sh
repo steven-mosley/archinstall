@@ -435,7 +435,7 @@ configure_system() {
     if ! mountpoint -q /mnt; then
         log "ERROR: /mnt is not mounted. Cannot configure system."
         return 1
-    }
+    fi
     log "Configuring system..."
 
     # Locales setup
