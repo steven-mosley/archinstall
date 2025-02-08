@@ -34,18 +34,32 @@ handle_error() {
 trap 'handle_error ${LINENO}' ERR
 
 #-----------------------------------------------------------
-# Check Dependencies and Internet
+# Validate Boot Media: Ensure running from official Arch ISO
 #-----------------------------------------------------------
-check_dependencies() {
-    local deps=("parted" "wipefs" "curl" "arch-chroot")
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" >/dev/null 2>&1; then
-            log "ERROR: Required dependency '$dep' is not installed"
-            exit 1
+check_boot_media() {
+    # Official Arch ISOs set up /run/archiso; its absence indicates unofficial boot media.
+    if [ -d /run/archiso ]; then
+        return 0
+    fi
+
+    # Check for the --unsupported-boot-media flag among script arguments.
+    local proceed=0
+    for arg in "$@"; do
+        if [ "$arg" = "--unsupported-boot-media" ]; then
+            proceed=1
+            break
         fi
     done
+
+    if [ "$proceed" -ne 1 ]; then
+        log "ERROR: Unofficial boot media detected. This script is only supported on an official Arch ISO. Rerun with the --unsupported-boot-media flag if you wish to proceed."
+        exit 1
+    fi
 }
 
+#-----------------------------------------------------------
+# Check Internet connectivity
+#-----------------------------------------------------------
 check_internet() {
     log "Checking internet connectivity..."
     if ! ping -c 1 archlinux.org &>/dev/null; then
@@ -54,6 +68,9 @@ check_internet() {
     fi
 }
 
+#-----------------------------------------------------------
+# Check if system is booted in UEFI mode
+#-----------------------------------------------------------
 check_uefi() {
     if [[ ! -d /sys/firmware/efi ]]; then
         log "ERROR: System not booted in UEFI mode"
@@ -120,14 +137,13 @@ create_partition_menu() {
 }
 
 #-----------------------------------------------------------
-# For a disk like /dev/nvme0n1, we must append 'p' for partition
-# For /dev/sda or /dev/vda, just append the digit
+# For a disk like /dev/nvme0n1, we must append 'p' for partition;
+# for /dev/sda or /dev/vda, just append the digit.
 #-----------------------------------------------------------
 get_partition_name() {
   local disk="$1"
   local part_num="$2"
 
-  # Matches /dev/nvme<number>n<number>, possibly multi-digit
   if [[ "$disk" =~ nvme[0-9]+n[0-9]+$ ]]; then
     echo "${disk}p${part_num}"
   else
@@ -152,13 +168,11 @@ verify_disk_space() {
 }
 
 #-----------------------------------------------------------
-# Unmount & swapoff everything on $selected_disk
-# Then wipe out partition table (GPT) on that disk
+# Unmount & swapoff everything on $selected_disk, then wipe partitions
 #-----------------------------------------------------------
 wipe_partitions() {
   echo "Wiping existing partitions on $selected_disk..." > /dev/tty
 
-  # Unmount anything on this disk and disable swap
   for part in $(lsblk -n -o NAME "$selected_disk"); do
     if [[ -b "/dev/$part" ]]; then
       umount -R "/dev/$part" 2>/dev/null || true
@@ -166,7 +180,6 @@ wipe_partitions() {
     fi
   done
 
-  # Destroy all FS signatures, then make new GPT label
   wipefs -a "$selected_disk"
   parted -s "$selected_disk" mklabel gpt
   echo "GPT partition table created on $selected_disk" > /dev/tty
@@ -178,29 +191,25 @@ wipe_partitions() {
 calculate_swap_size() {
   local ram_kB
   ram_kB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-  # half of RAM in MiB
   local swap_mib=$(( ram_kB / 2 / 1024 ))
   echo "$swap_mib"
 }
 
 #-----------------------------------------------------------
 # Automatic or manual partitioning.
-#   auto_ext4  -> (esp, swap, root ext4)
-#   auto_btrfs -> (esp, swap, root btrfs)
-#   manual     -> open cfdisk, user does everything else
+#   auto_ext4  -> (ESP, swap, root ext4)
+#   auto_btrfs -> (ESP, swap, root BTRFS)
+#   manual     -> Launch cfdisk for user-driven partitioning
 #-----------------------------------------------------------
 perform_partitioning() {
   local disk="$1"
   local choice="$2"
-
   local swap_size
   swap_size=$(calculate_swap_size)
 
   case "$choice" in
     "auto_ext4")
         echo "Performing automatic partitioning (ext4) on $disk" > /dev/tty
-
-        # Partition layout
         local esp=$(get_partition_name "$disk" 1)
         local swp=$(get_partition_name "$disk" 2)
         local root=$(get_partition_name "$disk" 3)
@@ -211,19 +220,15 @@ perform_partitioning() {
         parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
 
         partprobe "$disk"
-
-        # Wipe leftover signatures on each partition
         wipefs -a "$esp"
         wipefs -a "$swp"
         wipefs -a "$root"
 
-        # Format with force flags where relevant
         mkfs.fat -F32 -I "$esp"
         mkswap "$swp"
         swapon "$swp"
         mkfs.ext4 -F "$root"
 
-        # Mount
         mount "$root" /mnt
         mkdir -p /mnt/efi
         mount "$esp" /mnt/efi
@@ -231,7 +236,6 @@ perform_partitioning() {
     
     "auto_btrfs")
         echo "Performing automatic partitioning (BTRFS) on $disk" > /dev/tty
-
         local esp=$(get_partition_name "$disk" 1)
         local swp=$(get_partition_name "$disk" 2)
         local root=$(get_partition_name "$disk" 3)
@@ -242,8 +246,6 @@ perform_partitioning() {
         parted -s "$disk" mkpart primary btrfs "$((513 + swap_size))MiB" 100%
 
         partprobe "$disk"
-
-        # Wipe leftover signatures
         wipefs -a "$esp"
         wipefs -a "$swp"
         wipefs -a "$root"
@@ -253,7 +255,6 @@ perform_partitioning() {
         swapon "$swp"
         mkfs.btrfs -f "$root"
 
-        # Create subvolumes
         mount "$root" /mnt
         btrfs subvolume create /mnt/@
         btrfs subvolume create /mnt/@home
@@ -262,7 +263,6 @@ perform_partitioning() {
         btrfs subvolume create /mnt/@snapshots
         umount /mnt
 
-        # Remount subvolumes
         mount -o subvol=@,compress=zstd,noatime "$root" /mnt
         mkdir -p /mnt/{efi,home,var/log,var/cache/pacman/pkg,.snapshots}
         mount -o subvol=@home,compress=zstd,noatime "$root" /mnt/home
@@ -283,34 +283,24 @@ create_user_account() {
     local username
     local -a additional_groups=("wheel" "users" "storage" "power" "audio" "video" "optical")
     
-    # Validate username
     while true; do
         prompt "Enter username (lowercase letters, numbers, or underscore, 3-32 chars): " username
-        
-        # Check username format
         if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]]; then
             log "ERROR: Invalid username format. Please try again."
             continue
         fi
-        
-        # Check if username is reserved
         if grep -q "^$username:" /mnt/etc/passwd 2>/dev/null; then
             log "ERROR: Username '$username' already exists."
             continue
         fi
-        
-        # Check against system reserved names
         local reserved_names=("root" "daemon" "bin" "sys" "sync" "games" "man" "lp" "mail" "news" "uucp" "proxy" "www-data" "backup" "list" "irc" "gnats" "nobody" "systemd-network" "systemd-resolve" "messagebus" "systemd-timesync" "polkitd")
-        
         if [[ " ${reserved_names[@]} " =~ " ${username} " ]]; then
             log "ERROR: Username '$username' is reserved. Please choose another."
             continue
         fi
-        
         break
     done
     
-    # Create user and set password
     log "Creating user account..."
     arch-chroot /mnt useradd -m -G "$(IFS=,; echo "${additional_groups[*]}")" -s /bin/bash "$username"
     
@@ -319,17 +309,13 @@ create_user_account() {
         log "Password setting failed. Please try again."
     done
 
-    # Set up minimal .bashrc
     setup_user_environment "$username"
-    
     return 0
 }
 
 setup_user_environment() {
     local username="$1"
     local user_home="/home/$username"
-
-    # Create minimal .bashrc
     cat > "/mnt$user_home/.bashrc" <<EOF
 # User's .bashrc configuration
 [[ \$- != *i* ]] && return
@@ -347,14 +333,8 @@ EOF
 #-----------------------------------------------------------
 configure_sudo_access() {
     local username="$1"
-    
-    # Create sudoers.d directory if it doesn't exist
     arch-chroot /mnt mkdir -p /etc/sudoers.d
-    
-    # Uncomment the wheel group line in the main sudoers file
     arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-    
-    # Verify sudoers syntax
     if ! arch-chroot /mnt visudo -c; then
         log "ERROR: Sudo configuration syntax error detected"
         return 1
@@ -366,17 +346,14 @@ configure_sudo_access() {
 #-----------------------------------------------------------
 setup_user_accounts() {
     log "Setting up user accounts..."
-    
     create_user_account || {
         log "ERROR: Failed to create user account"
         return 1
     }
-    
     configure_sudo_access "$username" || {
         log "ERROR: Failed to configure sudo access"
         return 1
     }
-    
     log "User account setup completed successfully"
     return 0
 }
@@ -388,12 +365,10 @@ install_base_system() {
     if ! mountpoint -q /mnt; then
         log "ERROR: /mnt is not mounted. Cannot install base system."
         return 1
-    }
+    fi
 
-    # Prompt user if they want to use zsh
     prompt "Do you want to use zsh as your default shell? (yes/no): " use_zsh
 
-    # Check if BTRFS is chosen and include btrfs-progs
     if [[ "$partition_choice" == "auto_btrfs" ]]; then
         if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
             log "Installing base system (base, linux, linux-firmware, sudo, btrfs-progs, zsh)..."
@@ -422,7 +397,7 @@ setup_network() {
     if ! mountpoint -q /mnt; then
         log "ERROR: /mnt is not mounted. Cannot configure network."
         return 1
-    }
+    fi
     log "Setting up minimal network configuration..."
     arch-chroot /mnt pacman -S --noconfirm networkmanager
     arch-chroot /mnt systemctl enable NetworkManager.service
@@ -438,7 +413,6 @@ configure_system() {
     fi
     log "Configuring system..."
 
-    # Locales setup
     locales=(
         "en_US.UTF-8 UTF-8"
         "en_GB.UTF-8 UTF-8"
@@ -465,26 +439,21 @@ configure_system() {
     arch-chroot /mnt locale-gen
     echo "LANG=$(echo "$selected_locale" | awk '{print $1}')" > /mnt/etc/locale.conf
 
-    # Hostname
     prompt "Enter your desired hostname: " hostname
     echo "$hostname" > /mnt/etc/hostname
 
-    # /etc/hosts
     {
         echo "127.0.0.1    localhost"
         echo "::1          localhost"
         echo "127.0.1.1    $hostname.localdomain $hostname"
     } > /mnt/etc/hosts
 
-    # Timezone (using ipapi)
     arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$(curl -s https://ipapi.co/timezone)" /etc/localtime
     arch-chroot /mnt hwclock --systohc
 
-    # Root password
     log "Set the root password (you will be prompted in chroot):"
     arch-chroot /mnt passwd
 
-    # Bootloader
     log "Installing GRUB bootloader..."
     arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
@@ -500,7 +469,7 @@ main() {
     create_partition_menu
     perform_partitioning "$selected_disk" "$partition_choice"
 
-    # If user used manual partitioning, they must do their own mkfs & mount
+    # If manual partitioning was chosen, the user must handle mkfs & mount.
     install_base_system || exit 1
 
     setup_network
@@ -508,5 +477,8 @@ main() {
     setup_user_accounts || exit 1
     log "Installation complete! You can now reboot."
 }
+
+# Validate boot media before proceeding
+check_boot_media "$@"
 
 main
