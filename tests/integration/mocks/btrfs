@@ -1,0 +1,10 @@
+#!/bin/bash
+# Mock btrfs command
+
+if [[ "$1" == "subvolume" && "$2" == "create" ]]; then
+    echo "MOCK: Creating BTRFS subvolume at $3"
+else
+    echo "MOCK: btrfs $*"
+fi
+
+exit 0

@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "10737418240" # 10GB
+exit 0

@@ -1,6 +1,6 @@
 # Arch Linux Installation Script
 
-An automated installation script for Arch Linux that simplifies the setup process.
+A simple script for installing Arch Linux with sensible defaults.
 
 ## Features
 
@@ -44,13 +44,59 @@ Alternatively, use the provided setup script:
 ./setup_test_env.sh
 ```
 
-### Testing
+## Testing
 
-Run the test suite with:
+The script includes various test files to ensure it functions correctly:
+
+### Running Tests
+
+To run all tests:
 
 ```bash
-./bats-core/bin/bats tests/
+bash tests/all_tests.sh
 ```
+
+To run specific tests:
+
+1. Minimal install test (non-root):
+```bash
+bash tests/minimal-install.sh
+```
+
+2. Minimal install test (with root):
+```bash
+sudo tests/sudo_test_wrapper.sh tests/minimal-install.sh
+```
+
+3. Direct run test:
+```bash
+bash tests/debug_direct_run.sh
+```
+
+4. BATS tests:
+```bash
+bats tests/integration/install_flow.bats
+```
+
+### Test Structure
+
+- `tests/minimal-install.sh`: Tests each function in isolation
+- `tests/debug_direct_run.sh`: Runs with full debug output
+- `tests/trace_run.sh`: Traces execution step by step
+- `tests/integration/install_flow.bats`: BATS integration tests
+- `tests/sudo_test_wrapper.sh`: Helper for running tests as root
+
+### Mock Commands
+
+Mock commands are located in `tests/integration/mocks/`:
+
+- `lsblk`: Simulates disk listing
+- `sgdisk`: Simulates partition manipulation
+- `blockdev`: Simulates block device information
+- `ping`: Simulates connectivity checking
+- `pacstrap`: Simulates package installation
+- `reflector`: Simulates mirror list optimization
+- `arch-chroot`: Simulates chroot operations
 
 ## Project Structure
 

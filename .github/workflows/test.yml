@@ -1,0 +1,70 @@
+name: Shell Script Tests
+
+on:
+  push:
+    branches: [ main, v2 ]
+  pull_request:
+    branches: [ main, v2 ]
+
+jobs:
+  lint:
+    name: Lint Shell Scripts
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install shellcheck
+      run: sudo apt-get update && sudo apt-get install -y shellcheck
+    
+    - name: Run shellcheck
+      run: |
+        shellcheck install.sh
+        shellcheck -x functions.sh
+        find tests -name "*.sh" -exec shellcheck {} \;
+
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install BATS
+      run: |
+        git clone https://github.com/bats-core/bats-core.git
+        cd bats-core
+        sudo ./install.sh /usr
+    
+    - name: Create modules directory
+      run: mkdir -p modules
+    
+    - name: Run unit tests
+      run: bats tests/unit/functions.bats
+    
+    - name: Run minimal tests
+      run: bats tests/minimal_test.bats
+
+  integration-tests:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up environment
+      run: |
+        # Create necessary directories
+        mkdir -p modules
+        mkdir -p tests/mocks
+        # Make files executable
+        chmod +x install.sh
+        chmod +x tests/run_test.sh
+        find tests -name "*.sh" -exec chmod +x {} \;
+    
+    - name: Create mock modules
+      run: |
+        for module in checks disk filesystem network system user utils; do
+          echo "#!/bin/bash" > "modules/${module}.sh"
+          echo "# Mock module for testing" >> "modules/${module}.sh"
+        done
+    
+    - name: Run integration test script
+      run: ./tests/run_test.sh

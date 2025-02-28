@@ -21,6 +21,8 @@ DEFAULT_SHELL="bash"
 DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_TZ="UTC"
 VERSION="0.1.0"
+TEST_MODE=${TEST_MODE:-0}
+MOCK_ROOT=${MOCK_ROOT:-""}
 
 # Remove or export unused variables
 # BLUE="\033[1;34m"  # Removing if unused
@@ -30,7 +32,16 @@ export DEFAULT_TZ
 
 # Function to display log messages
 log() {
-    echo -e "${YELLOW}[LOG]${NC} $*"
+    if [[ "$TEST_MODE" == 1 ]]; then
+        echo -e "[LOG] $*"
+    else
+        echo -e "${YELLOW}[LOG]${NC} $*"
+    fi
+    
+    # Write to log file if available
+    if [[ -n "$LOG_FILE" && -d "$(dirname "$LOG_FILE")" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+    fi
 }
 
 # Function to display error messages and exit
@@ -39,11 +50,20 @@ error() {
     exit 1
 }
 
-# Function to get user confirmation
+# Function to get user confirmation with debug support
 prompt() {
     local response
     while true; do
+        if [[ $DEBUG -eq 1 ]]; then
+            echo "DEBUG: Prompting user for confirmation: $1"
+        fi
+        
         read -r -p "$1 [y/n]: " response
+        
+        if [[ $DEBUG -eq 1 ]]; then
+            echo "DEBUG: Received response: '$response'"
+        fi
+        
         case "${response,,}" in
             y|yes) return 0 ;;
             n|no)  return 1 ;;
@@ -72,6 +92,10 @@ parse_args() {
                 echo "Archinstall v$VERSION"
                 exit 0
                 ;;
+            --test)
+                TEST_MODE=1
+                SKIP_BOOT_CHECK=1
+                ;;
             --shell=*)
                 DEFAULT_SHELL="${arg#*=}"
                 ;;
@@ -88,23 +112,66 @@ parse_args() {
     done
 }
 
-# Source module files
+# Source module files - using absolute paths for reliability
 source_modules() {
-    local module_dir
-    module_dir="$(dirname "$0")/modules"
+    # Get the directory of the script using a robust method
+    local script_path
+    if [[ -L "${BASH_SOURCE[0]}" ]]; then
+        script_path="$(readlink -f "${BASH_SOURCE[0]}")"
+    else
+        script_path="${BASH_SOURCE[0]}"
+    fi
+    local script_dir
+    script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+    local module_dir="$script_dir/modules"
+    
+    if [[ $DEBUG -eq 1 ]]; then
+        echo "Script path: $script_path"
+        echo "Script dir: $script_dir"
+        echo "Module dir: $module_dir"
+        ls -la "$script_dir" || echo "Cannot list script directory"
+    fi
+    
+    # Create modules directory if it doesn't exist
+    mkdir -p "$module_dir"
     
     if [[ -d "$module_dir" ]]; then
-        for module in "$module_dir"/*.sh; do
-            if [[ -f "$module" ]]; then
-                if [[ $DEBUG -eq 1 ]]; then
-                    log "Loading module: $module"
-                fi
-                # shellcheck source=/dev/null
-                source "$module"
+        # Create a counter for loaded modules
+        local loaded_count=0
+        
+        # First check if the directory is empty
+        if [[ -z "$(ls -A "$module_dir")" ]]; then
+            if [[ $DEBUG -eq 1 ]]; then
+                log "Module directory is empty: $module_dir"
             fi
-        done
+            # Create placeholder modules for testing
+            if [[ "$TEST_MODE" -eq 1 ]]; then
+                for name in checks disk filesystem network system user utils; do
+                    echo "#!/bin/bash" > "$module_dir/${name}.sh"
+                    echo "# Mock module created during test" >> "$module_dir/${name}.sh"
+                    chmod +x "$module_dir/${name}.sh"
+                    ((loaded_count++))
+                done
+            fi
+        else
+            # Load existing module files
+            for module in "$module_dir"/*.sh; do
+                if [[ -f "$module" ]]; then
+                    if [[ $DEBUG -eq 1 ]]; then
+                        log "Loading module: $module"
+                    fi
+                    # shellcheck source=/dev/null
+                    source "$module"
+                    ((loaded_count++))
+                fi
+            done
+        fi
+        
+        if [[ $DEBUG -eq 1 ]]; then
+            log "Loaded $loaded_count modules"
+        fi
     else
-        error "Module directory not found: $module_dir"
+        error "Module directory not found and could not be created: $module_dir"
     fi
 }
 
@@ -172,18 +239,41 @@ optimize_mirrors() {
 # Function to create disk selection menu
 create_disk_menu() {
     log "Scanning available disks..."
-    lsblk -d -o NAME,SIZE,MODEL
     
-    local disks
-    mapfile -t disks < <(lsblk -d -o NAME -n | grep -v "loop")
+    if [[ "$DEBUG" -eq 1 ]]; then
+        echo "DEBUG: Running lsblk command to list disks"
+    fi
+    
+    # This safer approach ensures we only get actual disk names
+    local disks=()
+    while IFS= read -r disk; do
+        if [[ -n "$disk" && "$disk" != "NAME" && "$disk" != "loop"* ]]; then
+            disks+=("$disk")
+        fi
+    done < <(lsblk -d -o NAME -n 2>/dev/null)
+    
+    # For test mode, if no disks found, use mock disks
+    if [[ ${#disks[@]} -eq 0 && "$TEST_MODE" -eq 1 ]]; then
+        log "No disks found, using mock disks for testing"
+        disks=("sda" "sdb")
+    elif [[ ${#disks[@]} -eq 0 ]]; then
+        error "No disks found"
+    fi
     
     echo "Available disks:"
     for i in "${!disks[@]}"; do
         echo "$((i+1)). /dev/${disks[i]}"
     done
     
+    # For testing, pre-select disk 1
+    if [[ "$TEST_MODE" -eq 1 ]]; then
+        log "Auto-selecting disk 1 for testing"
+        selected_disk="/dev/${disks[0]}"
+        return 0
+    fi
+    
     local selection
-    read -r -p "Select a disk by number: " selection
+    read -r -p "Select a disk (number): " selection
     
     if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt "${#disks[@]}" ]; then
         error "Invalid selection"
@@ -222,8 +312,8 @@ wipe_partitions() {
 # Function to present partitioning options
 create_partition_menu() {
     echo "Partitioning schemes:"
-    echo "1. Standard (root + home + swap)"
-    echo "2. Simple (root + swap)"
+    echo "1. BTRFS with subvolumes (root, home, packages, logs)"
+    echo "2. Simple ext4 (root + swap)"
     echo "3. Custom partitioning"
     
     read -r -p "Select a partitioning scheme: " partition_choice
@@ -232,12 +322,25 @@ create_partition_menu() {
         error "Invalid selection"
     fi
     
+    # Additional configuration for BTRFS setup
+    if [[ "$partition_choice" == "1" ]]; then
+        log "Selected BTRFS with custom subvolume layout"
+        filesystem_type="btrfs"
+    elif [[ "$partition_choice" == "2" ]]; then
+        log "Selected simple ext4 setup"
+        filesystem_type="ext4"
+    else
+        log "Selected custom partitioning"
+    fi
+    
     log "Selected partitioning scheme: $partition_choice"
     return 0
 }
 
 # Function to perform partitioning based on selected scheme
 perform_partitioning() {
+    log "Partitioning disk $selected_disk..."
+    
     case "$partition_choice" in
         1)
             log "Creating standard partitions (root + home + swap)..."
@@ -261,7 +364,13 @@ perform_partitioning() {
 install_base_system() {
     log "Installing base Arch Linux system..."
     # Logic to mount partitions and install base system
-    # pacstrap /mnt base linux linux-firmware
+    if [[ "$TEST_MODE" == 1 ]]; then
+        mkdir -p /tmp/mnt
+        pacstrap /tmp/mnt base linux linux-firmware
+    else
+        # pacstrap /mnt base linux linux-firmware
+        echo "Would run: pacstrap /mnt base linux linux-firmware"
+    fi
     log "Base system installed"
     return 0
 }
@@ -285,6 +394,57 @@ configure_system() {
 # Function to set up user accounts
 setup_user_accounts() {
     log "Setting up user accounts..."
+    
+    # Debug output for package questions
+    if [[ $DEBUG -eq 1 ]]; then
+        echo "DEBUG: About to ask user about additional packages"
+    fi
+    
+    # Ask for additional packages
+    echo "Do you want to install additional packages [y/n]: "
+    read -r response
+    
+    if [[ $DEBUG -eq 1 ]]; then
+        echo "DEBUG: User response for additional packages: '$response'"
+    fi
+    
+    if [[ "${response,,}" == "y" || "${response,,}" == "yes" ]]; then
+        echo "Enter package names (separated by spaces): "
+        read -r additional_packages
+        
+        if [[ $DEBUG -eq 1 ]]; then
+            echo "DEBUG: User specified packages: '$additional_packages'"
+        fi
+        
+        if [[ -n "$additional_packages" ]]; then
+            log "Installing additional packages: $additional_packages"
+            if [[ "$TEST_MODE" -eq 1 ]]; then
+                echo "Mock installing: $additional_packages"
+            else
+                log "Would run: arch-chroot /mnt pacman -S --noconfirm $additional_packages"
+            fi
+        else
+            log "No packages specified for installation"
+        fi
+    else
+        log "No additional packages requested."
+    fi
+    
+    # Shell preference with debug output
+    echo "Enter preferred shell (default: bash): "
+    read -r shell_choice
+    
+    if [[ $DEBUG -eq 1 ]]; then
+        echo "DEBUG: User specified shell: '$shell_choice'"
+    fi
+    
+    shell_choice=${shell_choice:-bash}
+    if [[ -n "$shell_choice" && "$shell_choice" != "bash" ]]; then
+        log "Setting up $shell_choice as default shell"
+    else
+        log "Using default shell: bash"
+    fi
+    
     # User account creation logic here
     log "User accounts created"
     return 0
@@ -325,14 +485,48 @@ cleanup() {
 
 # Main function to orchestrate the installation process
 main() {
-    clear
+    # Only clear screen if not in test mode and not being sourced
+    if [[ "$TEST_MODE" != 1 && "${BASH_SOURCE[0]}" == "${0}" ]]; then
+        clear
+    fi
+    
+    # Print header without clearing in test mode
     echo -e "${GREEN}==========================================${NC}"
     echo -e "${GREEN}       Arch Linux Installation Script     ${NC}"
     echo -e "${GREEN}==========================================${NC}"
     
+    # Always show script information in test mode
+    if [[ "$TEST_MODE" -eq 1 ]]; then
+        echo "Running script: ${BASH_SOURCE[0]}"
+        echo "Current directory: $(pwd)"
+        echo "Test mode: $TEST_MODE"
+        echo "Debug mode: $DEBUG"
+        
+        if [[ $DEBUG -eq 1 ]]; then
+            echo "PATH: $PATH"
+            echo "User: $(whoami) (EUID: $EUID)"
+        fi
+    fi
+    
     parse_args "$@"
     
-    check_root
+    # Ensure modules directory exists
+    local script_dir
+    script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    mkdir -p "$script_dir/modules"
+    
+    # Create log directory
+    if [[ "$TEST_MODE" -eq 1 ]]; then
+        mkdir -p /tmp/archinstall_logs
+        LOG_FILE="/tmp/archinstall_logs/install.log"
+    else
+        LOG_FILE=""
+    fi
+    
+    # Skip root check in test mode
+    if [[ "$TEST_MODE" != 1 ]]; then
+        check_root
+    fi
     
     if [[ $CHECK_VERSION -eq 1 ]]; then
         check_version
@@ -369,7 +563,13 @@ main() {
     return 0
 }
 
-# Execute main function with all arguments if script is executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Only execute main function if the script is being run directly
+# and not sourced, or if explicitly requested with --test
+if [[ "${BASH_SOURCE[0]}" == "${0}" || "$*" == *"--test"* ]]; then
     main "$@"
+else
+    # If being sourced, output a message
+    if [[ "$TEST_MODE" -eq 1 && "$DEBUG" -eq 1 ]]; then
+        echo "Script sourced but not executed directly"
+    fi
 fi

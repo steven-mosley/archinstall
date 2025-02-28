@@ -1,0 +1,10 @@
+#!/bin/bash
+if [[ "$*" == *"-d -o NAME -n"* ]]; then
+  echo "sda"
+  echo "sdb"
+else
+  echo "NAME SIZE MODEL"
+  echo "sda  20G  MOCK_DISK1"
+  echo "sdb  40G  MOCK_DISK2"
+fi
+exit 0

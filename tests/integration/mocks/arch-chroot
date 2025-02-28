@@ -1,0 +1,5 @@
+#!/bin/bash
+# Mock arch-chroot command
+
+echo "MOCK: Executing in chroot: $*"
+exit 0

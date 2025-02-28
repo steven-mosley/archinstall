@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "MOCK SUDO: Ping successful"
+exit 0

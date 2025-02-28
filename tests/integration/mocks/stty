@@ -1,0 +1,5 @@
+#!/bin/bash
+# Mock stty command that might be used in read operations
+
+echo "MOCK: stty $*"
+exit 0
