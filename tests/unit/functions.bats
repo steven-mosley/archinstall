@@ -3,11 +3,11 @@
 load ../test_helper
 
 setup() {
-  # Override functions that would have side effects
-  function error() { echo "ERROR: $*"; return 1; }
+  # Set flag to indicate we're running in a test environment
+  export BATS_TEST_NAME="$BATS_TEST_DESCRIPTION"
   
-  # Source the main script with overrides
-  source "${BATS_TEST_DIRNAME}/../../install.sh"
+  # Source the functions
+  source "${BATS_TEST_DIRNAME}/../../functions.sh"
 }
 
 teardown() {
@@ -23,13 +23,13 @@ teardown() {
 }
 
 @test "error function exits with status 1" {
-  # Mock the exit function to prevent actual exit
-  function exit() { return $1; }
+  # Override exit to prevent actual exit
+  function exit() { echo "Would exit with $1"; return $1; }
+  export -f exit
   
-  # Run the error function
   run error "Test error message"
   
-  # Verify it outputs ERROR prefix and returns 1
+  echo "Output: $output" >&3
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR:"* ]]
   [[ "$output" == *"Test error"* ]]
@@ -56,10 +56,12 @@ teardown() {
 }
 
 @test "check_root succeeds when root" {
-  # Mock functions to simulate being root
+  # Mock id to simulate being root
   function id() { echo 0; }
   export -f id
   
   run check_root
+  echo "Output: $output" >&3
+  echo "Status: $status" >&3
   [ "$status" -eq 0 ]
 }

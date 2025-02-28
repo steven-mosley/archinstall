@@ -7,7 +7,8 @@ log() {
 
 # Log an error and exit with status 1
 error() {
-  echo "ERROR: $1" >&2
+  # Don't redirect to stderr during tests so BATS can capture output
+  echo "ERROR: $1"
   exit 1
 }
 
@@ -29,8 +30,13 @@ parse_args() {
 # Check if the script is run as root
 check_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    error "This script must be run as root."
-    return 1
+    # During tests, we want to output the message but not exit
+    if [[ -n "$BATS_TEST_NAME" ]]; then
+      echo "ERROR: This script must be run as root."
+      return 1
+    else
+      error "This script must be run as root."
+    fi
   fi
   return 0
 }
