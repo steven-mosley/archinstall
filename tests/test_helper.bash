@@ -25,17 +25,35 @@ create_test_file() {
   echo "$content" > "$path"
 }
 
-// Set up common test environment
+# Fix path handling to prevent double slashes
+
+# Find the script directory without trailing slash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Line 28: Load the script under test properly
+load_script() {
+  local script_name="$1"
+  source "${PROJECT_ROOT}/${script_name#/}"
+}
+
+# Line 38: Include files properly
+include_file() {
+  local file_name="$1"
+  source "${PROJECT_ROOT}/${file_name#/}"
+}
+
+# Set up common test environment
 setup_test_env() {
-  // Create mock directory structure
+  # Create mock directory structure
   mkdir -p /tmp/archinstall_test/proc
   mkdir -p /tmp/archinstall_test/sys/firmware/efi/efivars
   
-  // Export variables
+  # Export variables
   export TEST_DIR="/tmp/archinstall_test"
 }
 
-// Clean up test environment
+# Clean up test environment
 cleanup_test_env() {
   rm -rf /tmp/archinstall_test
 }
