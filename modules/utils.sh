@@ -1,14 +1,54 @@
-# utils.sh
+#!/bin/bash
+# Utility functions for the installer
+
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
+# Logging function
 log() {
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    echo -e "${BLUE}[${timestamp}]${NC} $*" | tee -a "$LOG_FILE"
+}
+
+# Debug logging function
+debug() {
+    if [[ "$DEBUG" -eq 1 ]]; then
+        local timestamp
+        timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+        echo -e "${YELLOW}[DEBUG ${timestamp}]${NC} $*" | tee -a "$LOG_FILE"
+    fi
+}
+
+# Prompt function
+prompt() {
     local message="$1"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] $message" >> "$LOG_FILE"
-    [[ $DEBUG -eq 1 ]] && echo -e "${GREEN}==> ${NC}$message" || echo -e "${GREEN}==> ${NC}$message" > /dev/tty
+    local var_name="$2"
+    
+    read -r -p "$message" "$var_name"
+}
+
+# Error function
+error() {
+    log "${RED}ERROR:${NC} $*"
+}
+
+# Function to source all modules
+source_modules() {
+    debug "Sourcing modules from $BASE_DIR/modules/"
+    for module in "$BASE_DIR"/modules/*.sh; do
+        if [[ -f "$module" ]]; then
+            debug "Loading module: $(basename "$module")"
+            source "$module" || { error "Failed to load $module"; exit 1; }
+        else
+            error "Module $module not found"
+        fi
+    done
+    debug "All modules loaded successfully"
 }
 
 handle_error() {
@@ -31,11 +71,4 @@ spinner() {
         sleep 0.1
     done
     printf "\r${GREEN}==> ${NC}$msg Done" > /dev/tty
-}
-
-prompt() {
-    local message="$1"
-    local varname="$2"
-    echo -e "${YELLOW}$message${NC}" > /dev/tty
-    read -r "$varname" < /dev/tty
 }

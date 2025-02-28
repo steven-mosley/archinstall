@@ -1,33 +1,53 @@
-# Archinstall (v0.1.0)
+# Arch Linux Installation Script
 
-A modular, user-friendly script to automate Arch Linux installation.
+An automated installation script for Arch Linux that simplifies the setup process.
 
 ## Features
-- Supports ext4, BTRFS (with subvolumes), or manual partitioning
-- Configurable shell, locale, and timezone
-- GRUB or systemd-boot bootloader options
-- Sleek interface with progress spinners
+
+- Guided installation process
+- Disk partitioning options
+- Network configuration
+- User account setup
+- Customizable shell, locale, and timezone settings
 
 ## Usage
-`sudo ./install.sh [options]`
+
+```bash
+sudo ./install.sh [options]
+```
 
 ### Options
-- `--shell=SHELL` (e.g., `bash`, `zsh`)
-- `--locale=LOCALE` (e.g., `en_US.UTF-8`)
-- `--timezone=TZ` (e.g., `UTC`, `America/New_York`)
-- `--debug` (Verbose output)
-- `--unsupported-boot-media` (Allow non-official ISO)
-- `--skip-boot-check` (Skip boot media check for non-live systems)
-- `--version` (Show version)
-- `--check-version` (Check for updates)
 
-## Requirements
-- Arch Linux ISO (or compatible live environment)
-- Internet connection
-- UEFI system
+- `--shell=SHELL`: Set default shell (bash, zsh)
+- `--locale=LOCALE`: Set system locale (e.g., en_US.UTF-8)
+- `--timezone=TZ`: Set timezone (e.g., Europe/London)
+- `--debug`: Enable debug mode
+- `--unsupported-boot-media`: Allow installation on unsupported boot media
+- `--check-version`: Check for script updates
+- `--skip-boot-check`: Skip boot media verification
+- `--version`: Display version information
 
-## Logs
-- Location: `/var/log/archinstall.log`
+## Testing
 
-## Contributing
-Fork this repo, make changes in `modules/`, and submit a PR!
+Run the test suite with:
+
+```bash
+cd tests
+bats .
+```
+
+## Project Structure
+
+```
+archinstall/
+├── install.sh         # Main installation script
+├── modules/           # Script modules
+│   ├── disk.sh        # Disk handling functions
+│   ├── network.sh     # Network configuration
+│   ├── system.sh      # System configuration
+│   └── ...
+├── tests/             # Test suite
+│   ├── install.bats   # Main test file
+│   └── ...
+└── VERSION            # Version file
+```
