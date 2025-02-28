@@ -29,7 +29,7 @@ prompt() {
     local message="$1"
     local var_name="$2"
     
-    read -r -p "$message" "$var_name"
+    read -r -p "$message" response && eval "$var_name=\$response"
 }
 
 # Error function
@@ -43,6 +43,7 @@ source_modules() {
     for module in "$BASE_DIR"/modules/*.sh; do
         if [[ -f "$module" ]]; then
             debug "Loading module: $(basename "$module")"
+            # shellcheck source=./path/to/possible/modules/
             source "$module" || { error "Failed to load $module"; exit 1; }
         else
             error "Module $module not found"
@@ -67,8 +68,8 @@ spinner() {
     local i=0
     while kill -0 "$pid" 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\r${GREEN}==> ${NC}$msg ${spin:$i:1}" > /dev/tty
+        printf "\r%s%s%s %s" "${GREEN}==>" "${NC}" "$msg" "${spin:$i:1}" > /dev/tty
         sleep 0.1
     done
-    printf "\r${GREEN}==> ${NC}$msg Done" > /dev/tty
+    printf "\r%s%s%s Done" "${GREEN}==>" "${NC}" "$msg" > /dev/tty
 }

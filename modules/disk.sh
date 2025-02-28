@@ -24,6 +24,9 @@ create_disk_menu() {
     
     prompt "Select disk (number): " disk_num
     
+    # Initialize disk_num at the beginning of the function
+    local disk_num
+    read -r disk_num
     if ! [[ "$disk_num" =~ ^[0-9]+$ ]] || [ "$disk_num" -lt 1 ] || [ "$disk_num" -gt "${#disk_options[@]}" ]; then
         log "Invalid selection."
         create_disk_menu
@@ -45,6 +48,9 @@ verify_disk_space() {
     if (( size_gb < min_size )); then
         log "Warning: Disk $disk has less than ${min_size}GB of space."
         prompt "Continue anyway? (y/n): " continue
+        # Initialize continue variable
+        local continue
+        read -r continue
         [[ "$continue" =~ ^[Yy] ]] || return 1
     fi
     
@@ -56,6 +62,9 @@ wipe_partitions() {
     log "Preparing to wipe partitions on $selected_disk"
     prompt "WARNING: This will DESTROY ALL DATA on $selected_disk. Continue? (y/n): " confirm
     
+    # Initialize confirm variable
+    local confirm
+    read -r confirm
     if [[ "$confirm" =~ ^[Yy] ]]; then
         log "Wiping partitions..."
         # Clear partition table
@@ -76,6 +85,9 @@ create_partition_menu() {
     
     prompt "Enter your choice (number): " choice
     
+    # Initialize choice variable
+    local choice
+    read -r choice
     if ! [[ "$choice" =~ ^[1-3]$ ]]; then
         log "Invalid selection."
         create_partition_menu

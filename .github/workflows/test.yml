@@ -14,6 +14,6 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install -y bats shellcheck
       - name: Syntax check
-        run: shellcheck install.sh modules/*.sh
+        run: shellcheck -x install.sh modules/*.sh
       - name: Run tests
         run: cd tests && bats .

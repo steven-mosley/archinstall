@@ -32,6 +32,10 @@ check_uefi() {
 install_base_system() {
     log "Installing base system packages..."
     
+    # Ensure selected_disk is properly assigned before use
+    if [ -z "$selected_disk" ]; then
+        selected_disk=$(select_disk) || return 1
+    fi
     # Format partitions
     local efi_partition="${selected_disk}1"
     local root_partition="${selected_disk}2"
@@ -103,8 +107,10 @@ setup_user_accounts() {
     log "Setting root password:"
     arch-chroot /mnt passwd || return 1
     
-    # Create user
-    prompt "Enter username: " username
+    # Ensure username is properly assigned before use
+    if [ -z "$username" ]; then
+        username=$(create_user_account) || return 1
+    fi
     arch-chroot /mnt useradd -m -G wheel "$username" || return 1
     
     log "Setting password for $username:"

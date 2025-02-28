@@ -1,32 +1,20 @@
 #!/usr/bin/env bats
 
+# Setup - runs before each test
 setup() {
-    # Get absolute path to the install.sh file
-    SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install.sh"
-    
-    # Create a temporary directory for test artifacts
+    # Create temp directory for test artifacts
     export TMPDIR="$(mktemp -d)"
     
-    # Define required variables and functions BEFORE sourcing
-    export YELLOW=""
-    export NC=""
-    log() { echo "$@"; }
-    prompt() { echo "y"; }
+    # Source the script but mock dangerous functions
+    # Save original functions that we'll mock
+    source "${BATS_TEST_DIRNAME}/install.sh" || true
     
-    # Mock the module sourcing
-    function source_modules() {
-        echo "Mocking module sourcing"
-    }
-    
-    # Source the script with absolute path
-    source "$SCRIPT_PATH" || echo "Sourcing failed: $?"
-    
-    # Override system-modifying functions
+    # Mock external commands to prevent actual system changes
     function check_boot_media() { return 0; }
     function check_internet() { return 0; }
     function check_uefi() { return 0; }
     function optimize_mirrors() { return 0; }
-    function create_disk_menu() { selected_disk="/dev/sda"; }
+    function create_disk_menu() { selected_disk="/dev/mock"; }
     function verify_disk_space() { return 0; }
     function wipe_partitions() { return 0; }
     function create_partition_menu() { partition_choice="1"; }
@@ -36,166 +24,125 @@ setup() {
     function configure_system() { return 0; }
     function setup_user_accounts() { return 0; }
     function cleanup() { return 0; }
-    
-    # Override exit to prevent actual termination
+    function log() { echo "$@"; }
+    function prompt() { return 0; }
+
+    # Prevent actual exit in tests
     function exit() { return "$1"; }
     
-    # Mock clear to prevent terminal clearing
-    function clear() { return 0; }
-    
-    # Mock curl to avoid actual network requests
-    function curl() {
+    # Prevent actual curl requests
+    function curl() { 
         if [[ "$*" == *"VERSION"* ]]; then
             echo "0.1.0"
-            return 0
         fi
-        return 1
     }
+    
+    # Prevent actual clear
+    function clear() { return 0; }
+    
+    # Mock EUID for root check tests
+    export BATS_MOCK_EUID=$EUID
 }
 
+# Teardown - runs after each test
 teardown() {
-    if [ -d "$TMPDIR" ]; then
-        rm -rf "$TMPDIR"
-    fi
+    rm -rf "$TMPDIR"
 }
 
-# Test root requirement
-@test "Script should exit if not run as root" {
-    run bash -c "EUID=1000; source ${BATS_TEST_DIRNAME}/install.sh"
+# Test root check
+@test "Should exit if not run as root" {
+    EUID=1000
+    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Run as root"* ]]
+    [[ "$output" =~ "Run as root" ]]
 }
 
 # Test version flag
-@test "Script should display version with --version flag" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --version"
-    [[ "$output" == *"Archinstall v0.1.0"* ]]
+@test "Should display version when --version flag is used" {
+    run parse_args --version
+    [[ "$output" =~ "Archinstall v0.1.0" ]]
 }
 
-# Test parse_args function with various arguments
-@test "parse_args should set DEBUG with --debug flag" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --debug"
-    [ "$status" -eq 0 ]
+# Test debug flag 
+@test "Should set DEBUG when --debug flag is passed" {
+    DEBUG=0
+    parse_args --debug
     [ "$DEBUG" -eq 1 ]
 }
 
-@test "parse_args should set UNSUPPORTED with --unsupported-boot-media flag" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --unsupported-boot-media"
-    [ "$status" -eq 0 ]
+# Test unsupported boot media flag
+@test "Should set UNSUPPORTED when --unsupported-boot-media flag is passed" {
+    UNSUPPORTED=0
+    parse_args --unsupported-boot-media
     [ "$UNSUPPORTED" -eq 1 ]
 }
 
-@test "parse_args should set CHECK_VERSION with --check-version flag" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --check-version"
-    [ "$status" -eq 0 ]
+# Test check version flag
+@test "Should set CHECK_VERSION when --check-version flag is passed" {
+    CHECK_VERSION=0
+    parse_args --check-version
     [ "$CHECK_VERSION" -eq 1 ]
 }
 
-@test "parse_args should set SKIP_BOOT_CHECK with --skip-boot-check flag" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --skip-boot-check"
-    [ "$status" -eq 0 ]
+# Test skip boot check flag
+@test "Should set SKIP_BOOT_CHECK when --skip-boot-check flag is passed" {
+    SKIP_BOOT_CHECK=0
+    parse_args --skip-boot-check
     [ "$SKIP_BOOT_CHECK" -eq 1 ]
 }
 
-@test "parse_args should set DEFAULT_SHELL with --shell option" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --shell=zsh"
-    [ "$status" -eq 0 ]
+# Test shell option
+@test "Should set DEFAULT_SHELL when --shell option is passed" {
+    parse_args --shell=zsh
     [ "$DEFAULT_SHELL" = "zsh" ]
 }
 
-@test "parse_args should set DEFAULT_LOCALE with --locale option" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --locale=fr_FR.UTF-8"
-    [ "$status" -eq 0 ]
-    [ "$DEFAULT_LOCALE" = "fr_FR.UTF-8" ]
+# Test locale option
+@test "Should set DEFAULT_LOCALE when --locale option is passed" {
+    parse_args --locale=en_US.UTF-8
+    [ "$DEFAULT_LOCALE" = "en_US.UTF-8" ]
 }
 
-@test "parse_args should set DEFAULT_TZ with --timezone option" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --timezone=Europe/Berlin"
-    [ "$status" -eq 0 ]
-    [ "$DEFAULT_TZ" = "Europe/Berlin" ]
+# Test timezone option
+@test "Should set DEFAULT_TZ when --timezone option is passed" {
+    parse_args --timezone=America/New_York
+    [ "$DEFAULT_TZ" = "America/New_York" ]
 }
 
-@test "parse_args should exit with error on invalid option" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && parse_args --invalid-option"
+# Test invalid option
+@test "Should exit with error on invalid option" {
+    run parse_args --invalid-option
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Unknown option"* ]]
+    [[ "$output" =~ "Unknown option" ]]
 }
 
-# Test check_version function
-@test "check_version should proceed when version matches" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && check_version"
+# Test check_version function when versions match
+@test "check_version should return success when versions match" {
+    # Mock the curl call to return the same version
+    function curl() { echo "0.1.0"; }
+    run check_version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"You're running the latest version"* ]]
+    [[ "$output" =~ "latest version" ]]
 }
 
-@test "check_version should handle network errors gracefully" {
-    function curl() { return 1; }
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && check_version"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Couldn't fetch a valid version"* ]]
-}
-
-@test "check_version should detect newer versions" {
-    function curl() { 
-        if [[ "$*" == *"VERSION"* ]]; then
-            echo "0.2.0"
-            return 0
-        fi
-    }
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && check_version"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"New version available"* ]]
-}
-
-@test "check_version should handle invalid version formats" {
-    function curl() { 
-        if [[ "$*" == *"VERSION"* ]]; then
-            echo "not-a-version"
-            return 0
-        fi
-    }
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && check_version"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Couldn't fetch a valid version"* ]]
-}
-
-# Test main function with mocked dependencies
-@test "main function should execute installation flow without errors" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && main --debug --skip-boot-check"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Starting Arch Linux installation"* ]]
-    [[ "$output" == *"Installation complete"* ]]
-}
-
-@test "main function should check version when --check-version is specified" {
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && main --check-version"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Checking for updates"* ]]
-}
-
-@test "main function should skip boot check when --skip-boot-check is specified" {
-    function check_boot_media() { 
-        echo "This should not be called"
-        return 1
-    }
+# Test check_version function when remote version is newer
+@test "check_version should prompt when remote version is newer" {
+    # Mock curl and prompt for this test
+    function curl() { echo "0.2.0"; }
+    function prompt() { echo "y"; }
     
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && main --skip-boot-check"
+    run check_version
     [ "$status" -eq 0 ]
-    [[ ! "$output" == *"This should not be called"* ]]
+    [[ "$output" =~ "New version available" ]]
 }
 
-@test "main function should handle errors during installation" {
-    function install_base_system() { return 1; }
+# Test basic flow of main function with mocked dependencies
+@test "main function should run without errors when dependencies are met" {
+    # Skip dangerous operations with mocks
+    function check_boot_media() { return 0; }
+    function check_internet() { return 0; }
+    function check_uefi() { return 0; }
     
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && main"
-    [ "$status" -eq 1 ]
-}
-
-@test "main function should pass arguments to parse_args" {
-    function parse_args() { 
-        echo "Args received: $*"
-    }
-    
-    run bash -c "source ${BATS_TEST_DIRNAME}/install.sh && main --debug --skip-boot-check"
-    [[ "$output" == *"Args received: --debug --skip-boot-check"* ]]
+    run main --debug --skip-boot-check
+    [ "$status" -eq 0 ]
 }

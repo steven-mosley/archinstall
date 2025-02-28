@@ -27,13 +27,29 @@ sudo ./install.sh [options]
 - `--skip-boot-check`: Skip boot media verification
 - `--version`: Display version information
 
-## Testing
+## Development
+
+### Setting Up the Repository
+
+After cloning the repository, initialize the submodules:
+
+```bash
+git submodule init
+git submodule update
+```
+
+Alternatively, use the provided setup script:
+
+```bash
+./setup_test_env.sh
+```
+
+### Testing
 
 Run the test suite with:
 
 ```bash
-cd tests
-bats .
+./bats-core/bin/bats tests/
 ```
 
 ## Project Structure
@@ -44,10 +60,9 @@ archinstall/
 ├── modules/           # Script modules
 │   ├── disk.sh        # Disk handling functions
 │   ├── network.sh     # Network configuration
-│   ├── system.sh      # System configuration
-│   └── ...
+│   └── system.sh      # System configuration
 ├── tests/             # Test suite
-│   ├── install.bats   # Main test file
-│   └── ...
+│   └── install.bats   # Main test file
+├── bats-core/         # BATS testing framework (submodule)
 └── VERSION            # Version file
 ```

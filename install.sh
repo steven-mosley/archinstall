@@ -10,7 +10,6 @@ set -e
 YELLOW="\033[1;33m"
 GREEN="\033[1;32m"
 RED="\033[1;31m"
-BLUE="\033[1;34m"
 NC="\033[0m" # No Color
 
 # Global variables
@@ -22,6 +21,12 @@ DEFAULT_SHELL="bash"
 DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_TZ="UTC"
 VERSION="0.1.0"
+
+# Remove or export unused variables
+# BLUE="\033[1;34m"  # Removing if unused
+export DEFAULT_SHELL
+export DEFAULT_LOCALE
+export DEFAULT_TZ
 
 # Function to display log messages
 log() {

@@ -1,3 +1,4 @@
+#!/bin/bash
 # user.sh
 create_user_account() {
     local username
@@ -8,7 +9,7 @@ create_user_account() {
         break
     done
     log "Creating user '$username'..."
-    arch-chroot /mnt useradd -m -G wheel -s "$DEFAULT_SHELL" "$username" $([[ $DEBUG -eq 1 ]] && echo "" || echo ">/dev/null 2>&1")
+    arch-chroot /mnt useradd -m -G wheel -s "$DEFAULT_SHELL" "$username" "$([[ $DEBUG -eq 1 ]] && echo "" || echo ">/dev/null 2>&1")"
     log "Set password for '$username' (enter twice):"
     arch-chroot /mnt passwd "$username"
     if [[ "$DEFAULT_SHELL" == "/bin/zsh" ]]; then
@@ -22,7 +23,7 @@ EOF
         cat > "/mnt/home/$username/.bashrc" <<EOF
 # User's shell config
 alias grep='grep --color=auto'
-alias ip='ip -color=auto'
+alias ip='ip --color=auto'
 PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 EOF
     fi
@@ -31,13 +32,14 @@ EOF
 
 configure_sudo_access() {
     local username="$1"
-    arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers $([[ $DEBUG -eq 1 ]] && echo "" || echo ">/dev/null 2>&1")
-    arch-chroot /mnt visudo -c $([[ $DEBUG -eq 1 ]] && echo "" || echo ">/dev/null 2>&1") || { log "${RED}Sudo config error!${NC}"; return 1; }
+    arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers "$([[ $DEBUG -eq 1 ]] && echo "" || echo ">/dev/null 2>&1")"
+    arch-chroot /mnt visudo -c "$([[ $DEBUG -eq 1 ]] && echo "" || echo ">/dev/null 2>&1")" || { log "${RED}Sudo config error!${NC}"; return 1; }
     log "Sudo access granted for '$username'."
 }
 
 setup_user_accounts() {
     log "Setting up user..."
-    local new_username=$(create_user_account) || { log "${RED}User creation failed!${NC}"; return 1; }
+    local new_username
+    new_username=$(create_user_account) || { log "${RED}User creation failed!${NC}"; return 1; }
     configure_sudo_access "$new_username" || return 1
 }
