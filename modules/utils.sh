@@ -36,12 +36,15 @@ prompt() {
         message+=": "
     fi
     
-    # Fix SC2034 by directly assigning to the variable name instead of using an intermediate variable
-    read -r -p "$message" "$var_name"
+    # Use a temporary variable to store the input
+    local temp_input
+    read -r -p "$message" temp_input
     
     # If empty and we have a default, use the default
-    if [[ -z "${!var_name}" && -n "$default" ]]; then
-        eval "$var_name=\$default"
+    if [[ -z "$temp_input" && -n "$default" ]]; then
+        eval "$var_name='$default'"
+    else
+        eval "$var_name='$temp_input'"
     fi
 }
 
