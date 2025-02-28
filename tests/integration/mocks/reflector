@@ -1,6 +1,0 @@
-#!/bin/bash
-
-# Mock reflector command
-echo "MOCK: Running reflector with args: $*"
-echo "MOCK: Mirror list updated"
-exit 0

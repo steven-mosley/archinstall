@@ -1,5 +1,0 @@
-#!/bin/bash
-
-# Simple mock for 'which' command
-echo "/mock/bin/$1"
-exit 0

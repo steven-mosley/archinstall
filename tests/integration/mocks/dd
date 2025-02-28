@@ -1,8 +1,0 @@
-#!/bin/bash
-# Mock dd command for testing
-
-echo "MOCK: dd $*"
-echo "1024+0 records in"
-echo "1024+0 records out"
-echo "$3 bytes (1.0 GB, 1.0 GiB) copied, 0.1 s, 10 MB/s"
-exit 0

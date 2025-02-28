@@ -15,28 +15,22 @@ NC="\033[0m" # No Color
 # Global variables
 DEBUG=0
 UNSUPPORTED=0
-CHECK_VERSION=0
+CHECK_VERSION=0  # Keep this flag for version checking
 SKIP_BOOT_CHECK=0
 DEFAULT_SHELL="bash"
 DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_TZ="UTC"
 VERSION="0.1.0"
-TEST_MODE=${TEST_MODE:-0}
-MOCK_ROOT=${MOCK_ROOT:-""}
 
-# Remove or export unused variables
-# BLUE="\033[1;34m"  # Removing if unused
+# Export variables needed by modules
 export DEFAULT_SHELL
 export DEFAULT_LOCALE
 export DEFAULT_TZ
+export UEFI_MODE=0
 
 # Function to display log messages
 log() {
-    if [[ "$TEST_MODE" == 1 ]]; then
-        echo -e "[LOG] $*"
-    else
-        echo -e "${YELLOW}[LOG]${NC} $*"
-    fi
+    echo -e "${YELLOW}[LOG]${NC} $*"
     
     # Write to log file if available
     if [[ -n "$LOG_FILE" && -d "$(dirname "$LOG_FILE")" ]]; then
@@ -50,20 +44,11 @@ error() {
     exit 1
 }
 
-# Function to get user confirmation with debug support
+# Function to get user confirmation
 prompt() {
     local response
     while true; do
-        if [[ $DEBUG -eq 1 ]]; then
-            echo "DEBUG: Prompting user for confirmation: $1"
-        fi
-        
         read -r -p "$1 [y/n]: " response
-        
-        if [[ $DEBUG -eq 1 ]]; then
-            echo "DEBUG: Received response: '$response'"
-        fi
-        
         case "${response,,}" in
             y|yes) return 0 ;;
             n|no)  return 1 ;;
@@ -89,12 +74,8 @@ parse_args() {
                 SKIP_BOOT_CHECK=1
                 ;;
             --version)
-                echo "Archinstall v$VERSION"
+                echo "ArchInstall v$VERSION"
                 exit 0
-                ;;
-            --test)
-                TEST_MODE=1
-                SKIP_BOOT_CHECK=1
                 ;;
             --shell=*)
                 DEFAULT_SHELL="${arg#*=}"
@@ -105,80 +86,75 @@ parse_args() {
             --timezone=*)
                 DEFAULT_TZ="${arg#*=}"
                 ;;
+            --help)
+                show_help
+                exit 0
+                ;;
             *)
-                error "Unknown option: $arg"
+                error "Unknown option: $arg. Use --help to see available options."
                 ;;
         esac
     done
 }
 
+# Show help message
+show_help() {
+    cat << EOF
+Arch Linux Installation Script v$VERSION
+
+Usage: $0 [options]
+
+Options:
+  --debug                   Enable debug output
+  --unsupported-boot-media  Skip boot media verification
+  --skip-boot-check         Skip checking if running on Arch installation media
+  --check-version           Check for script updates
+  --shell=SHELL             Set default shell (default: bash)
+  --locale=LOCALE           Set default locale (default: en_US.UTF-8)
+  --timezone=TZ             Set default timezone (default: UTC)
+  --version                 Show version information
+  --help                    Show this help message
+
+Example:
+  $0 --timezone=America/New_York --locale=en_US.UTF-8 --shell=zsh
+
+EOF
+}
+
 # Source module files - using absolute paths for reliability
 source_modules() {
-    # Get the directory of the script using a robust method
-    local script_path
-    if [[ -L "${BASH_SOURCE[0]}" ]]; then
-        script_path="$(readlink -f "${BASH_SOURCE[0]}")"
-    else
-        script_path="${BASH_SOURCE[0]}"
-    fi
     local script_dir
-    script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+    script_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
     local module_dir="$script_dir/modules"
     
     if [[ $DEBUG -eq 1 ]]; then
-        echo "Script path: $script_path"
         echo "Script dir: $script_dir"
         echo "Module dir: $module_dir"
-        ls -la "$script_dir" || echo "Cannot list script directory"
     fi
     
-    # Create modules directory if it doesn't exist
+    # Ensure modules directory exists
     mkdir -p "$module_dir"
     
     if [[ -d "$module_dir" ]]; then
-        # Create a counter for loaded modules
-        local loaded_count=0
-        
-        # First check if the directory is empty
-        if [[ -z "$(ls -A "$module_dir")" ]]; then
-            if [[ $DEBUG -eq 1 ]]; then
-                log "Module directory is empty: $module_dir"
-            fi
-            # Create placeholder modules for testing
-            if [[ "$TEST_MODE" -eq 1 ]]; then
-                for name in checks disk filesystem network system user utils; do
-                    echo "#!/bin/bash" > "$module_dir/${name}.sh"
-                    echo "# Mock module created during test" >> "$module_dir/${name}.sh"
-                    chmod +x "$module_dir/${name}.sh"
-                    ((loaded_count++))
-                done
-            fi
-        else
-            # Load existing module files
-            for module in "$module_dir"/*.sh; do
-                if [[ -f "$module" ]]; then
-                    if [[ $DEBUG -eq 1 ]]; then
-                        log "Loading module: $module"
-                    fi
-                    # shellcheck source=/dev/null
-                    source "$module"
-                    ((loaded_count++))
+        # Load existing module files
+        for module in "$module_dir"/*.sh; do
+            if [[ -f "$module" ]]; then
+                if [[ $DEBUG -eq 1 ]]; then
+                    echo "Loading module: $module"
                 fi
-            done
-        fi
-        
-        if [[ $DEBUG -eq 1 ]]; then
-            log "Loaded $loaded_count modules"
-        fi
+                # shellcheck source=/dev/null
+                source "$module" || error "Failed to load module: $module"
+            fi
+        done
     else
-        error "Module directory not found and could not be created: $module_dir"
+        error "Module directory not found: $module_dir"
     fi
 }
 
 # Function to check if running as root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root. Run 'sudo $0'"
+        error "This script must be run as root. Try: sudo $0 $*"
     fi
 }
 
@@ -196,7 +172,6 @@ check_boot_media() {
     fi
     
     log "Valid Arch Linux boot media detected"
-    return 0
 }
 
 # Function to check internet connection
@@ -206,7 +181,6 @@ check_internet() {
         error "No internet connection. Please connect and try again."
     fi
     log "Internet connection verified"
-    return 0
 }
 
 # Function to check if system is booted in UEFI mode
@@ -214,13 +188,13 @@ check_uefi() {
     log "Checking boot mode..."
     if [[ -d /sys/firmware/efi/efivars ]]; then
         log "UEFI boot mode detected"
-        return 0
+        UEFI_MODE=1
     else
         log "Legacy BIOS boot mode detected"
+        UEFI_MODE=0
         if ! prompt "Continue with BIOS installation?"; then
             error "Installation canceled"
         fi
-        return 0
     fi
 }
 
@@ -233,7 +207,6 @@ optimize_mirrors() {
     else
         log "Reflector not found, skipping mirror optimization"
     fi
-    return 0
 }
 
 # Function to create disk selection menu
@@ -312,25 +285,14 @@ wipe_partitions() {
 # Function to present partitioning options
 create_partition_menu() {
     echo "Partitioning schemes:"
-    echo "1. BTRFS with subvolumes (root, home, packages, logs)"
-    echo "2. Simple ext4 (root + swap)"
+    echo "1. Standard (root + home + swap)"
+    echo "2. Simple (root + swap)"
     echo "3. Custom partitioning"
     
     read -r -p "Select a partitioning scheme: " partition_choice
     
     if ! [[ "$partition_choice" =~ ^[1-3]$ ]]; then
         error "Invalid selection"
-    fi
-    
-    # Additional configuration for BTRFS setup
-    if [[ "$partition_choice" == "1" ]]; then
-        log "Selected BTRFS with custom subvolume layout"
-        filesystem_type="btrfs"
-    elif [[ "$partition_choice" == "2" ]]; then
-        log "Selected simple ext4 setup"
-        filesystem_type="ext4"
-    else
-        log "Selected custom partitioning"
     fi
     
     log "Selected partitioning scheme: $partition_choice"
@@ -395,54 +357,27 @@ configure_system() {
 setup_user_accounts() {
     log "Setting up user accounts..."
     
-    # Debug output for package questions
-    if [[ $DEBUG -eq 1 ]]; then
-        echo "DEBUG: About to ask user about additional packages"
-    fi
-    
     # Ask for additional packages
-    echo "Do you want to install additional packages [y/n]: "
-    read -r response
-    
-    if [[ $DEBUG -eq 1 ]]; then
-        echo "DEBUG: User response for additional packages: '$response'"
-    fi
-    
-    if [[ "${response,,}" == "y" || "${response,,}" == "yes" ]]; then
-        echo "Enter package names (separated by spaces): "
-        read -r additional_packages
-        
-        if [[ $DEBUG -eq 1 ]]; then
-            echo "DEBUG: User specified packages: '$additional_packages'"
-        fi
-        
+    if prompt "Do you want to install additional packages?"; then
+        read -r -p "Enter package names (separated by spaces): " additional_packages
         if [[ -n "$additional_packages" ]]; then
             log "Installing additional packages: $additional_packages"
             if [[ "$TEST_MODE" -eq 1 ]]; then
                 echo "Mock installing: $additional_packages"
             else
+                # arch-chroot /mnt pacman -S --noconfirm $additional_packages
                 log "Would run: arch-chroot /mnt pacman -S --noconfirm $additional_packages"
             fi
-        else
-            log "No packages specified for installation"
         fi
     else
         log "No additional packages requested."
     fi
     
-    # Shell preference with debug output
-    echo "Enter preferred shell (default: bash): "
-    read -r shell_choice
-    
-    if [[ $DEBUG -eq 1 ]]; then
-        echo "DEBUG: User specified shell: '$shell_choice'"
-    fi
-    
+    # Setup shell preference
+    read -r -p "Enter preferred shell (default: bash): " shell_choice
     shell_choice=${shell_choice:-bash}
     if [[ -n "$shell_choice" && "$shell_choice" != "bash" ]]; then
         log "Setting up $shell_choice as default shell"
-    else
-        log "Using default shell: bash"
     fi
     
     # User account creation logic here
@@ -485,48 +420,20 @@ cleanup() {
 
 # Main function to orchestrate the installation process
 main() {
-    # Only clear screen if not in test mode and not being sourced
-    if [[ "$TEST_MODE" != 1 && "${BASH_SOURCE[0]}" == "${0}" ]]; then
-        clear
-    fi
+    clear
     
-    # Print header without clearing in test mode
+    # Print header
     echo -e "${GREEN}==========================================${NC}"
     echo -e "${GREEN}       Arch Linux Installation Script     ${NC}"
     echo -e "${GREEN}==========================================${NC}"
     
-    # Always show script information in test mode
-    if [[ "$TEST_MODE" -eq 1 ]]; then
-        echo "Running script: ${BASH_SOURCE[0]}"
-        echo "Current directory: $(pwd)"
-        echo "Test mode: $TEST_MODE"
-        echo "Debug mode: $DEBUG"
-        
-        if [[ $DEBUG -eq 1 ]]; then
-            echo "PATH: $PATH"
-            echo "User: $(whoami) (EUID: $EUID)"
-        fi
-    fi
-    
     parse_args "$@"
     
-    # Ensure modules directory exists
-    local script_dir
-    script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-    mkdir -p "$script_dir/modules"
-    
     # Create log directory
-    if [[ "$TEST_MODE" -eq 1 ]]; then
-        mkdir -p /tmp/archinstall_logs
-        LOG_FILE="/tmp/archinstall_logs/install.log"
-    else
-        LOG_FILE=""
-    fi
+    mkdir -p /var/log/archinstall
+    LOG_FILE="/var/log/archinstall/install.log"
     
-    # Skip root check in test mode
-    if [[ "$TEST_MODE" != 1 ]]; then
-        check_root
-    fi
+    check_root
     
     if [[ $CHECK_VERSION -eq 1 ]]; then
         check_version
@@ -537,10 +444,7 @@ main() {
     
     source_modules
     
-    if [[ $SKIP_BOOT_CHECK -ne 1 ]]; then
-        check_boot_media
-    fi
-    
+    check_boot_media
     check_internet
     check_uefi
     optimize_mirrors
@@ -552,24 +456,22 @@ main() {
     perform_partitioning
     
     install_base_system
-    setup_network
     configure_system
     setup_user_accounts
     
-    cleanup
-    
     log "Installation complete! You can now reboot into your new Arch Linux system."
+    
+    if prompt "Would you like to reboot now?"; then
+        log "Rebooting system..."
+        reboot
+    else
+        log "You can reboot manually when ready."
+    fi
     
     return 0
 }
 
 # Only execute main function if the script is being run directly
-# and not sourced, or if explicitly requested with --test
-if [[ "${BASH_SOURCE[0]}" == "${0}" || "$*" == *"--test"* ]]; then
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
-else
-    # If being sourced, output a message
-    if [[ "$TEST_MODE" -eq 1 && "$DEBUG" -eq 1 ]]; then
-        echo "Script sourced but not executed directly"
-    fi
 fi
