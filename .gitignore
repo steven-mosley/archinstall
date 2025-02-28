@@ -16,4 +16,5 @@
 Thumbs.db
 
 # Test artifacts
-tests/tmp/
+/tests/tmp/
+/coverage/
