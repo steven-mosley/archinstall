@@ -24,12 +24,25 @@ debug() {
     fi
 }
 
-# Prompt function
+# Function to get user input
 prompt() {
     local message="$1"
     local var_name="$2"
+    local default="${3:-}"
     
-    read -r -p "$message" response && eval "$var_name=\$response"
+    if [[ -n "$default" ]]; then
+        message+=" [$default]: "
+    else
+        message+=": "
+    fi
+    
+    # Fix SC2034 by directly assigning to the variable name instead of using an intermediate variable
+    read -r -p "$message" "$var_name"
+    
+    # If empty and we have a default, use the default
+    if [[ -z "${!var_name}" && -n "$default" ]]; then
+        eval "$var_name=\$default"
+    fi
 }
 
 # Error function
@@ -37,19 +50,15 @@ error() {
     log "${RED}ERROR:${NC} $*"
 }
 
-# Function to source all modules
-source_modules() {
-    debug "Sourcing modules from $BASE_DIR/modules/"
-    for module in "$BASE_DIR"/modules/*.sh; do
-        if [[ -f "$module" ]]; then
-            debug "Loading module: $(basename "$module")"
-            # shellcheck source=./path/to/possible/modules/
+# Load all module files
+load_modules() {
+    log "Loading modules..."
+    for module in "$SCRIPT_DIR/modules"/*.sh; do
+        if [[ "$module" != "$SCRIPT_DIR/modules/utils.sh" ]]; then
+            # shellcheck disable=SC1090
             source "$module" || { error "Failed to load $module"; exit 1; }
-        else
-            error "Module $module not found"
         fi
     done
-    debug "All modules loaded successfully"
 }
 
 handle_error() {
