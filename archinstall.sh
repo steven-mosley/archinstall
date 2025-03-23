@@ -120,15 +120,13 @@ create_disk_menu() {
 #-----------------------------------------------------------
 create_partition_menu() {
   echo "Partitioning Scheme Options:" > /dev/tty
-  echo "1) Automatic partitioning (ext4)" > /dev/tty
-  echo "2) Automatic partitioning (BTRFS)" > /dev/tty
-  echo "3) Manual partitioning (cfdisk)" > /dev/tty
+  echo "1) Automatic partitioning (BTRFS)" > /dev/tty
+  echo "2) Manual partitioning (cfdisk)" > /dev/tty
 
   prompt "Enter your choice (1-3): " choice
   case "$choice" in
-    1) partition_choice="auto_ext4" ;;
-    2) partition_choice="auto_btrfs" ;;
-    3) partition_choice="manual" ;;
+    1) partition_choice="auto_btrfs" ;;
+    2) partition_choice="manual" ;;
     *) 
        echo "Invalid choice. Try again." > /dev/tty
        create_partition_menu
@@ -208,32 +206,6 @@ perform_partitioning() {
   swap_size=$(calculate_swap_size)
 
   case "$choice" in
-    "auto_ext4")
-        echo "Performing automatic partitioning (ext4) on $disk" > /dev/tty
-        local esp=$(get_partition_name "$disk" 1)
-        local swp=$(get_partition_name "$disk" 2)
-        local root=$(get_partition_name "$disk" 3)
-
-        parted -s "$disk" mkpart primary fat32 1MiB 513MiB
-        parted -s "$disk" set 1 esp on
-        parted -s "$disk" mkpart primary linux-swap 513MiB "$((513 + swap_size))MiB"
-        parted -s "$disk" mkpart primary ext4 "$((513 + swap_size))MiB" 100%
-
-        partprobe "$disk"
-        wipefs -a "$esp"
-        wipefs -a "$swp"
-        wipefs -a "$root"
-
-        mkfs.fat -F32 -I "$esp"
-        mkswap "$swp"
-        swapon "$swp"
-        mkfs.ext4 -F "$root"
-
-        mount "$root" /mnt
-        mkdir -p /mnt/efi
-        mount "$esp" /mnt/efi
-        ;;
-    
     "auto_btrfs")
         echo "Performing automatic partitioning (BTRFS) on $disk" > /dev/tty
         local esp=$(get_partition_name "$disk" 1)
