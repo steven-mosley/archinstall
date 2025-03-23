@@ -458,15 +458,34 @@ install_base_system() {
     fi
 
     prompt "Do you want to use zsh as your default shell? (yes/no): " use_zsh
+    # Store the choice in a global variable to be used later during user creation
+    if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+        default_shell="zsh"
+    else
+        default_shell="bash"
+    fi
+
+    # Ask about btrfs-progs if using BTRFS
+    if [[ "$partition_choice" == "auto_btrfs" ]]; then
+        prompt "Do you want to install btrfs-progs for BTRFS filesystem management? (yes/no): " install_btrfs
+    else
+        install_btrfs="no"
+    fi
+
+    # Ask about enabling multilib repository
+    prompt "Do you want to enable the multilib repository for 32-bit software support? (yes/no): " enable_multilib
+
+    # Ask about pacman improvements
+    prompt "Do you want to apply pacman improvements (enable colors and parallel downloads)? (yes/no): " improve_pacman
 
     log "Installing essential packages..."
     local packages="base linux linux-firmware sudo"
     
-    if [[ "$partition_choice" == "auto_btrfs" ]]; then
+    if [[ "$install_btrfs" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
         packages="$packages btrfs-progs"
     fi
     
-    if [[ "$use_zsh" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+    if [[ "$default_shell" == "zsh" ]]; then
         packages="$packages zsh"
     fi
     
@@ -481,23 +500,153 @@ install_base_system() {
         log "ERROR: Failed to generate fstab"
         return 1
     fi
+
+    # Enable multilib repository if requested
+    if [[ "$enable_multilib" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+        enable_multilib_repository
+    fi
+    
+    # Apply pacman improvements if requested
+    if [[ "$improve_pacman" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+        configure_pacman_improvements
+    fi
     
     log "Base system installed successfully"
     return 0
 }
 
+# Enable multilib repository
+enable_multilib_repository() {
+    log "Enabling multilib repository..."
+    local pacman_conf="/mnt/etc/pacman.conf"
+    
+    # Check if multilib is already enabled
+    if grep -q "^\[multilib\]" "$pacman_conf"; then
+        log "Multilib repository is already enabled"
+        return 0
+    fi
+    
+    # Find the [multilib] section if it's commented out
+    if grep -q "^#\[multilib\]" "$pacman_conf"; then
+        log "Uncommenting existing multilib section"
+        # Uncomment the [multilib] section and the Include line below it
+        sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$pacman_conf"
+    else
+        # Append the multilib section if it doesn't exist
+        log "Adding multilib section to pacman.conf"
+        cat >> "$pacman_conf" <<EOF
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+EOF
+    fi
+    
+    # Update package database to include multilib
+    log "Updating package database with multilib repository..."
+    arch-chroot /mnt pacman -Sy || {
+        log "WARNING: Failed to update package database with multilib repository"
+    }
+    
+    log "Multilib repository enabled successfully"
+}
+
+# Configure pacman improvements (colors and parallel downloads)
+configure_pacman_improvements() {
+    log "Applying pacman improvements..."
+    local pacman_conf="/mnt/etc/pacman.conf"
+    
+    # Enable color
+    if grep -q "^#Color" "$pacman_conf"; then
+        log "Enabling colored output in pacman"
+        sed -i 's/^#Color/Color/' "$pacman_conf"
+    else
+        # If the Color option doesn't exist or is already enabled, don't do anything
+        if ! grep -q "^Color" "$pacman_conf"; then
+            log "Adding Color option to pacman.conf"
+            sed -i '/\[options\]/a Color' "$pacman_conf"
+        fi
+    fi
+    
+    # Enable parallel downloads
+    if grep -q "^#ParallelDownloads" "$pacman_conf"; then
+        log "Setting parallel downloads to 5"
+        sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' "$pacman_conf"
+    else
+        # If the ParallelDownloads option doesn't exist, add it
+        if ! grep -q "^ParallelDownloads" "$pacman_conf"; then
+            log "Adding ParallelDownloads option to pacman.conf"
+            sed -i '/\[options\]/a ParallelDownloads = 5' "$pacman_conf"
+        fi
+    fi
+    
+    log "Pacman improvements applied successfully"
+}
+
 # Detect CPU type and install appropriate microcode
 install_microcode() {
     log "Detecting CPU type for microcode..."
+    local cpu_vendor=""
+    
     if grep -q "GenuineIntel" /proc/cpuinfo; then
-        log "Intel CPU detected, installing intel-ucode..."
-        arch-chroot /mnt pacman -S --noconfirm intel-ucode
+        cpu_vendor="Intel"
+        log "Intel CPU detected"
     elif grep -q "AuthenticAMD" /proc/cpuinfo; then
-        log "AMD CPU detected, installing amd-ucode..."
-        arch-chroot /mnt pacman -S --noconfirm amd-ucode
+        cpu_vendor="AMD"
+        log "AMD CPU detected"
     else
-        log "CPU type not definitively detected, installing both microcode packages..."
-        arch-chroot /mnt pacman -S --noconfirm intel-ucode amd-ucode
+        cpu_vendor="Unknown"
+        log "CPU vendor not definitively detected"
+    fi
+    
+    # Ask the user if they want to install microcode
+    prompt "Do you want to install CPU microcode updates for $cpu_vendor CPU? (yes/no): " install_microcode
+    
+    if [[ "$install_microcode" =~ ^[Yy][Ee][Ss]|[Yy]$ ]]; then
+        if [[ "$cpu_vendor" == "Intel" ]]; then
+            log "Installing intel-ucode package..."
+            arch-chroot /mnt pacman -S --noconfirm intel-ucode
+        elif [[ "$cpu_vendor" == "AMD" ]]; then
+            log "Installing amd-ucode package..."
+            arch-chroot /mnt pacman -S --noconfirm amd-ucode
+        else
+            log "CPU vendor not definitively detected, asking which microcode to install..."
+            echo "Select microcode package to install:" > /dev/tty
+            echo "1) Intel CPU microcode" > /dev/tty
+            echo "2) AMD CPU microcode" > /dev/tty
+            echo "3) Both Intel and AMD microcode" > /dev/tty
+            echo "4) None" > /dev/tty
+            
+            local microcode_choice
+            while :; do
+                prompt "Enter your choice (1-4): " microcode_choice
+                case "$microcode_choice" in
+                    1) 
+                        log "Installing Intel CPU microcode..."
+                        arch-chroot /mnt pacman -S --noconfirm intel-ucode
+                        break
+                        ;;
+                    2) 
+                        log "Installing AMD CPU microcode..."
+                        arch-chroot /mnt pacman -S --noconfirm amd-ucode
+                        break
+                        ;;
+                    3) 
+                        log "Installing both Intel and AMD CPU microcode..."
+                        arch-chroot /mnt pacman -S --noconfirm intel-ucode amd-ucode
+                        break
+                        ;;
+                    4)
+                        log "No microcode will be installed"
+                        break
+                        ;;
+                    *)
+                        log "Invalid choice. Try again."
+                        ;;
+                esac
+            done
+        fi
+    else
+        log "Skipping microcode installation as requested"
     fi
 }
 
@@ -699,8 +848,8 @@ create_user_account() {
         break
     done
     
-    log "Creating user account for $username..."
-    arch-chroot /mnt useradd -mG wheel -s /bin/bash "$username" || {
+    log "Creating user account for $username with $default_shell as default shell..."
+    arch-chroot /mnt useradd -mG wheel -s "/bin/$default_shell" "$username" || {
         log "ERROR: Failed to create user account"
         return 1
     }
@@ -710,16 +859,22 @@ create_user_account() {
         log "Password setting failed. Please try again."
     done
 
-    setup_user_environment "$username"
+    # Setup the appropriate shell configuration files
+    if [[ "$default_shell" == "zsh" ]]; then
+        setup_zsh_environment "$username"
+    else
+        setup_bash_environment "$username"
+    fi
+    
     return 0
 }
 
-# Setup user environment files
-setup_user_environment() {
+# Setup bash environment for the user
+setup_bash_environment() {
     local username="$1"
     local user_home="/home/$username"
     
-    log "Setting up user environment for $username..."
+    log "Setting up bash environment for $username..."
     
     cat > "/mnt$user_home/.bashrc" <<EOF
 # User's .bashrc configuration
@@ -743,6 +898,71 @@ EOF
     arch-chroot /mnt chown -R "$username:$username" "$user_home" || {
         log "WARNING: Failed to set permissions on user home directory"
     }
+}
+
+# Setup zsh environment for the user
+setup_zsh_environment() {
+    local username="$1"
+    local user_home="/home/$username"
+    
+    log "Setting up zsh environment for $username..."
+    
+    # Create a basic zshrc file
+    cat > "/mnt$user_home/.zshrc" <<EOF
+# User's .zshrc configuration
+
+# History settings
+HISTFILE=~/.zsh_history
+HISTSIZE=1000
+SAVEHIST=1000
+setopt appendhistory
+
+# Basic completion settings
+autoload -Uz compinit
+compinit
+
+# Prompt settings
+autoload -Uz promptinit
+promptinit
+prompt adam1
+
+# Aliases
+alias ls='ls --color=auto'
+alias ll='ls -la'
+alias grep='grep --color=auto'
+alias ip='ip -color=auto'
+
+# Path settings
+typeset -U path PATH
+path=(~/bin ~/.local/bin \$path)
+export PATH
+EOF
+
+    # Create user's .config directory
+    mkdir -p "/mnt$user_home/.config" || {
+        log "WARNING: Failed to create user config directory"
+    }
+    
+    # Also create an empty .zsh_history file
+    touch "/mnt$user_home/.zsh_history" || {
+        log "WARNING: Failed to create zsh history file"
+    }
+    
+    # Set permissions
+    arch-chroot /mnt chown -R "$username:$username" "$user_home" || {
+        log "WARNING: Failed to set permissions on user home directory"
+    }
+}
+
+# Setup user environment files (legacy function now forwarding to the appropriate shell setup)
+setup_user_environment() {
+    local username="$1"
+    
+    if [[ "$default_shell" == "zsh" ]]; then
+        setup_zsh_environment "$username"
+    else
+        setup_bash_environment "$username"
+    fi
 }
 
 # Configure sudo access for the user
