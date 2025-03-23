@@ -438,7 +438,7 @@ setup_network() {
     if ! mountpoint -q /mnt; then
         log "ERROR: /mnt is not mounted. Cannot configure network."
         return 1
-    }
+    fi
     
     log "Installing and enabling NetworkManager..."
     arch-chroot /mnt pacman -S --noconfirm networkmanager || {
@@ -459,7 +459,7 @@ configure_system() {
     if ! mountpoint -q /mnt; then
         log "ERROR: /mnt is not mounted. Cannot configure system."
         return 1
-    }
+    fi
     
     log "Configuring system settings..."
 
