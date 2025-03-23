@@ -260,15 +260,13 @@ perform_partitioning() {
         btrfs subvolume create /mnt/@home
         btrfs subvolume create /mnt/@log
         btrfs subvolume create /mnt/@pkg
-        btrfs subvolume create /mnt/@snapshots
         umount /mnt
 
         mount -o subvol=@,compress=zstd,noatime "$root" /mnt
-        mkdir -p /mnt/{efi,home,var/log,var/cache/pacman/pkg,.snapshots}
-        mount -o subvol=@home,compress=zstd,noatime "$root" /mnt/home
-        mount -o subvol=@log,compress=zstd,noatime "$root" /mnt/var/log
-        mount -o subvol=@pkg,compress=zstd,noatime "$root" /mnt/var/cache/pacman/pkg
-        mount -o subvol=@snapshots,compress=zstd,noatime "$root" /mnt/.snapshots
+        mkdir -p /mnt/{efi,home,var/log,var/cache/pacman/pkg}
+        mount -o subvol=@home,compress=zstd,noatime,space_cache=v2 "$root" /mnt/home
+        mount -o subvol=@log,compress=zstd,noatime,space_cache=v2 "$root" /mnt/var/log
+        mount -o subvol=@pkg,compress=zstd,noatime,space_cache=v2 "$root" /mnt/var/cache/pacman/pkg
         mount "$esp" /mnt/efi
         ;;
     
@@ -281,7 +279,6 @@ perform_partitioning() {
 
 create_user_account() {
     local username
-    local -a additional_groups=("wheel" "users" "storage" "power" "audio" "video" "optical")
     
     while true; do
         prompt "Enter username (lowercase letters, numbers, or underscore, 3-32 chars): " username
@@ -302,7 +299,7 @@ create_user_account() {
     done
     
     log "Creating user account..."
-    arch-chroot /mnt useradd -m -G "$(IFS=,; echo "${additional_groups[*]}")" -s /bin/bash "$username"
+    arch-chroot /mnt useradd -mG "$username" -s /bin/bash "$username"
     
     log "Setting password for user $username..."
     while ! arch-chroot /mnt passwd "$username"; do
@@ -334,7 +331,7 @@ EOF
 configure_sudo_access() {
     local username="$1"
     arch-chroot /mnt mkdir -p /etc/sudoers.d
-    arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+    arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) NOPASSWD: ALL/%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers
     if ! arch-chroot /mnt visudo -c; then
         log "ERROR: Sudo configuration syntax error detected"
         return 1
